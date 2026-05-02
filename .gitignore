@@ -1,0 +1,12 @@
+.qlot/
+*.fasl
+*.fas
+*.lx64fsl
+*.dx64fsl
+*.dfsl
+*.lib
+*.o
+*.so
+*~
+\#*\#
+.#*
