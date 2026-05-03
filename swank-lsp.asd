@@ -10,7 +10,8 @@
                "yason"
                "bordeaux-threads"
                "usocket"
-               "quri")
+               "quri"
+               "cl-scope-resolver")
   :pathname "lsp-src/"
   :serial t
   :components ((:file "package")
