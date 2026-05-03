@@ -10,3 +10,7 @@
 *~
 \#*\#
 .#*
+.swank-port
+.swank-session
+.vlime-port
+.mcp.json
