@@ -223,8 +223,17 @@ serverCapabilities. Test verifies our ack of full sync."
 
 ;;;; -- textDocument/definition --
 ;;;;
-;;;; Calls swank:find-definitions-for-emacs and shapes the result into
-;;;; an LSP Location[] array. swank returns:
+;;;; Two-stage resolution:
+;;;;
+;;;; 1. LOCAL: ask cl-scope-resolver to find a binder in the *current*
+;;;;    document. If it answers :LOCAL with a (start, end) range, build
+;;;;    a Location pointing at that range in this same URI and return.
+;;;; 2. FOREIGN: the resolver said this isn't a local reference (free
+;;;;    variable, global function, special, quoted, macro-introduced,
+;;;;    walker-error, etc.). Fall through to swank:find-definitions-for-emacs
+;;;;    and shape its result into an LSP Location[].
+;;;;
+;;;; swank returns:
 ;;;;   ((dspec (:location (:file "/path") (:position N) (:snippet "...")))
 ;;;;    ...)
 ;;;; or sometimes (:error "msg") for the location.
@@ -233,33 +242,66 @@ serverCapabilities. Test verifies our ack of full sync."
 (defun definition-handler (params)
   (let* ((doc (document-from-params params :error-on-missing nil)))
     (unless doc (return-from definition-handler +json-null+))
-    (let ((text (document-text doc)))
+    (let ((text (document-text doc))
+          (uri (text-document-uri params)))
       (multiple-value-bind (line character) (position-of params)
         (let* ((line-starts (compute-line-starts text))
                (offset (lsp-position->char-offset
                         text line character
                         :encoding *server-position-encoding*
-                        :line-starts line-starts))
-               (sym (extract-symbol-at text offset))
-               (pkg (current-package-for-document doc)))
-          (declare (ignore line-starts))
-          (unless (and sym (plusp (length sym)))
-            (return-from definition-handler +json-null+))
-          (let ((defs (handler-case
-                          (with-swank-buffer-package (pkg)
-                            (swank:find-definitions-for-emacs sym))
-                        (error () nil))))
-            (let ((locations
-                    (loop for entry in defs
-                          for loc = (and (consp entry) (second entry))
-                          for url-and-range
-                            = (definition-entry->location-info loc pkg)
-                          when url-and-range
-                            collect (apply #'make-lsp-location url-and-range))))
-              (cond
-                ((null locations) +json-null+)
-                ((= 1 (length locations)) (first locations))
-                (t locations)))))))))
+                        :line-starts line-starts)))
+          ;; Use extract-symbol-at to get the symbol's start, so cursor
+          ;; placement is forgiving (cursor-just-past-end still works).
+          ;; The resolver requires an offset *inside* the symbol, which
+          ;; the raw LSP-derived offset won't always satisfy.
+          (multiple-value-bind (sym sym-start sym-end)
+              (extract-symbol-at text offset)
+            (declare (ignore sym-end))
+            (unless (and sym (plusp (length sym)))
+              (return-from definition-handler +json-null+))
+            ;; --- (1) LOCAL branch: try resolver first ---
+            (let ((local (try-local-resolution text sym-start uri line-starts)))
+              (when local (return-from definition-handler local)))
+            ;; --- (2) FOREIGN branch: existing swank path ---
+            (let* ((pkg (current-package-for-document doc))
+                   (defs (handler-case
+                             (with-swank-buffer-package (pkg)
+                               (swank:find-definitions-for-emacs sym))
+                           (error () nil))))
+              (let ((locations
+                      (loop for entry in defs
+                            for loc = (and (consp entry) (second entry))
+                            for url-and-range
+                              = (definition-entry->location-info loc pkg)
+                            when url-and-range
+                              collect (apply #'make-lsp-location url-and-range))))
+                (cond
+                  ((null locations) +json-null+)
+                  ((= 1 (length locations)) (first locations))
+                  (t locations))))))))))
+
+(defun try-local-resolution (text sym-start uri line-starts)
+  "Ask cl-scope-resolver about the symbol at SYM-START in TEXT. If it
+returns :LOCAL, build a same-document Location pointing at the binder.
+Otherwise (any :FOREIGN reason, OR resolver itself errors out), return
+NIL so the caller falls through to swank.
+
+We swallow resolver errors deliberately: an exception in the local
+branch should not prevent the swank path from getting its chance."
+  (multiple-value-bind (kind start end reason)
+      (handler-case
+          (cl-scope-resolver:resolve text sym-start)
+        (error () (values :foreign nil nil :resolver-error)))
+    (declare (ignore reason))
+    (when (and (eq kind :local) start end)
+      (let ((range (char-range->lsp-range
+                    text start end
+                    :encoding *server-position-encoding*
+                    :line-starts line-starts))
+            (h (make-hash-table :test 'equal)))
+        (setf (gethash "uri" h) uri
+              (gethash "range" h) range)
+        h))))
 
 (defun make-lsp-location (uri start-line start-char end-line end-char)
   (let ((h (make-hash-table :test 'equal)))

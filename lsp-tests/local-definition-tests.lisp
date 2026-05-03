@@ -159,7 +159,7 @@ first."
         ;; "(let ((x 1)) (let ((x 2)) (list x)))"
         ;;  0         1         2         3
         ;;  0123456789012345678901234567890123456
-        ;; outer x at 7, inner x at 19, use at 32
+        ;; outer x at 7, inner x at 20, use at 32
         (text "(let ((x 1)) (let ((x 2)) (list x)))"))
     (with-defn-fixture (sock uri text)
       ;; cursor on inner use of x at character 32
@@ -168,9 +168,9 @@ first."
         (is (hash-table-p loc) "Expected a Location, got ~S" result)
         (is (equal uri (gethash "uri" loc)))
         (let ((start (range-start loc)))
-          ;; Should be the *inner* binder at offset 19, not outer at 7.
-          (is (eql 19 (gethash "character" start))
-              "Expected inner binder at char 19, got ~S"
+          ;; Should be the *inner* binder at offset 20, not outer at 7.
+          (is (eql 20 (gethash "character" start))
+              "Expected inner binder at char 20, got ~S"
               (gethash "character" start)))))))
 
 ;;; --- Fall-through cases (resolver returns :FOREIGN) ---
