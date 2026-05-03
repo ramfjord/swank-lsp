@@ -1,3 +1,5 @@
 ql eclector
 ql hu.dwim.walker
 ql fiveam
+ql jsonrpc
+ql slime
