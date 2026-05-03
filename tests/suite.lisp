@@ -1,45 +1,27 @@
-(in-package #:cl-scope-resolver/tests)
+(in-package #:swank-lsp/tests)
 
-(def-suite all-tests
-  :description "All cl-scope-resolver tests.")
+;;;; Aggregate runner. Fiveam's `run!` works on a *symbol* — either
+;;;; a single test or a suite. We define ALL-TESTS as the umbrella
+;;;; suite that contains the three child suites, so `(run! 'all-tests)`
+;;;; runs everything.
 
-(in-suite all-tests)
+(def-suite all-tests :description "All swank-lsp tests (umbrella).")
 
-(defun run-corpus-case (case)
-  "Run RESOLVE on CASE and check against expectation. Returns:
-  (values OK-P actual-kind actual-start actual-end actual-reason
-          expected-kind expected-start expected-end)"
-  (multiple-value-bind (source offset) (corpus-case-source-and-offset case)
-    (multiple-value-bind (kind start end reason)
-        (cl-scope-resolver:resolve source offset)
-      (let ((expected-kind (getf case :expect))
-            (expected-start nil)
-            (expected-end nil))
-        (when (eq expected-kind :local)
-          (multiple-value-bind (s e)
-              (expected-binder-range source (getf case :binder)
-                                     (getf case :binder-name))
-            (setf expected-start s expected-end e)))
-        (let ((ok-p
-                (and (eq kind expected-kind)
-                     (or (not (eq expected-kind :local))
-                         (and (eql start expected-start)
-                              (eql end expected-end)))
-                     (or (null (getf case :reason))
-                         (eq reason (getf case :reason))))))
-          (values ok-p kind start end reason
-                  expected-kind expected-start expected-end))))))
+;; Re-parent each child suite under all-tests. Fiveam stores parent on
+;; the suite object's `in` slot; the simplest portable way is to
+;; explicitly re-define each suite naming all-tests as their parent.
 
-(test corpus
-  "Run every corpus case as a single test, with per-case failure messages."
-  (dolist (case *corpus*)
-    (multiple-value-bind (ok-p kind start end reason
-                          expected-kind expected-start expected-end)
-        (run-corpus-case case)
-      (declare (ignore reason))
-      (is-true ok-p
-               "case ~A: got (~S ~S ~S), expected (~S ~S ~S)~@[~%  note: ~A~]"
-               (getf case :name)
-               kind start end
-               expected-kind expected-start expected-end
-               (getf case :note)))))
+(def-suite position-suite :in all-tests
+  :description "LSP <-> char offset conversion.")
+
+(def-suite document-suite :in all-tests
+  :description "Document store and text helpers.")
+
+(def-suite wire-suite :in all-tests
+  :description "End-to-end LSP wire tests.")
+
+(def-suite local-definition-suite :in all-tests
+  :description "Local jump-to-def via cl-scope-resolver — wire-level integration.")
+
+(defun run-all ()
+  (run! 'all-tests))

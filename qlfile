@@ -1,5 +1,22 @@
+local cl-scope-resolver /home/tramfjord/projects/cl-scope-resolver/
 ql eclector
 ql hu.dwim.walker
 ql fiveam
 ql jsonrpc
 ql slime
+
+;; KNOWN ISSUE — qlot install does NOT follow package-inferred-system
+;; deps. jsonrpc/transport/tcp uses :import-from #:cl+ssl etc., which
+;; aren't visible to qlot's installer. A fresh `qlot install` here
+;; will leave the swank-lsp suite unable to load (cl+ssl, fast-io,
+;; flexi-streams, static-vectors, lw-compat, ... all missing).
+;;
+;; Workaround for a fresh checkout: either (a) `qlot add` each missing
+;; transitive dep until it loads, or (b) wrap the entrypoint in
+;; `ql:quickload :swank-lsp` before `asdf:load-system`, since
+;; quickload has lazy resolution. The previous (working) .qlot/
+;; directory was built up incrementally over Phase 1+2 dev and
+;; couldn't be reproduced from this qlfile alone.
+;;
+;; This is a pre-existing qlot limitation, not a regression from the
+;; cl-scope-resolver split.

@@ -12,7 +12,7 @@
                "usocket"
                "quri"
                "cl-scope-resolver")
-  :pathname "lsp-src/"
+  :pathname "src/"
   :serial t
   :components ((:file "package")
                (:file "position")
@@ -24,7 +24,7 @@
 (defsystem "swank-lsp/tests"
   :description "Wire-level integration tests for swank-lsp: opens a TCP socket, sends framed JSON-RPC, asserts on responses. Plus unit tests for the position-encoding module."
   :depends-on ("swank-lsp" "fiveam" "usocket" "yason" "bordeaux-threads")
-  :pathname "lsp-tests/"
+  :pathname "tests/"
   :serial t
   :components ((:file "package")
                (:file "suite")
