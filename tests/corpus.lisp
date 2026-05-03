@@ -37,14 +37,28 @@
                          (subseq source (+ pos (length marker))))
             pos)))
 
-(defun expected-binder-range (stripped-source binder-needle)
-  "Find BINDER-NEEDLE in STRIPPED-SOURCE; return (values START END)
-where END = START + (length BINDER-NEEDLE)."
-  (let ((pos (search binder-needle stripped-source)))
-    (unless pos
+(defun expected-binder-range (stripped-source binder-needle &optional binder-name)
+  "Locate the binder's source range in STRIPPED-SOURCE.
+
+BINDER-NEEDLE picks the surrounding context (used for disambiguation
+when the binder name itself is ambiguous, e.g. in shadowing tests);
+BINDER-NAME (or BINDER-NEEDLE if BINDER-NAME is NIL) is the actual
+substring whose range we want.
+
+The expected range always points at the binder *name* — not the
+enclosing binding form. This matches the resolver's API (`(values
+:LOCAL name-start name-end :OK)`)."
+  (let* ((needle-pos (search binder-needle stripped-source))
+         (name (or binder-name binder-needle)))
+    (unless needle-pos
       (error "Binder needle ~S not found in source ~S"
              binder-needle stripped-source))
-    (values pos (+ pos (length binder-needle)))))
+    (let ((name-pos
+            (search name stripped-source :start2 needle-pos)))
+      (unless name-pos
+        (error "Binder name ~S not found in source ~S after needle pos ~D"
+               name stripped-source needle-pos))
+      (values name-pos (+ name-pos (length name))))))
 
 (defparameter *corpus*
   '(;; --- LET family ---
@@ -60,12 +74,14 @@ where END = START + (length BINDER-NEEDLE)."
      ;; Inner binder. There are two "x" tokens before @x (outer and inner);
      ;; we want the second-to-last; use a more specific needle.
      :binder "((x 2"
+     :binder-name "x"
      :note "shadowed: inner LET wins. Binder needle includes context to disambiguate from outer.")
     (:name let-star-sequential
      :source "(let* ((x 1) (y x)) @y)"
      :marker "@"
      :expect :local
-     :binder "y x")
+     :binder "(y "
+     :binder-name "y")
     ;; --- LAMBDA / FLET / LABELS ---
     (:name lambda-param
      :source "((lambda (x) (+ @x 1)) 10)"
@@ -87,19 +103,22 @@ where END = START + (length BINDER-NEEDLE)."
      :source "(defun add (a b) (+ @a b))"
      :marker "@"
      :expect :local
-     :binder "a"
+     :binder "(a b"
+     :binder-name "a"
      :note "cursor on parameter reference inside DEFUN body")
     ;; --- DESTRUCTURING-BIND ---
     (:name destructuring-bind-simple
      :source "(destructuring-bind (a b) '(1 2) (+ @a b))"
      :marker "@"
      :expect :local
-     :binder "a")
+     :binder "(a b"
+     :binder-name "a")
     (:name destructuring-bind-nested
      :source "(destructuring-bind (a (b c)) '(1 (2 3)) (list a @b c))"
      :marker "@"
      :expect :local
-     :binder "b")
+     :binder "(b c"
+     :binder-name "b")
     ;; --- DOLIST / DOTIMES (expand to LET/BLOCK) ---
     (:name dolist-binding
      :source "(dolist (item '(1 2 3)) (print @item))"
@@ -111,13 +130,15 @@ where END = START + (length BINDER-NEEDLE)."
      :source "(dotimes (i 10) (print @i))"
      :marker "@"
      :expect :local
-     :binder "i")
+     :binder "(i 10"
+     :binder-name "i")
     ;; --- Nested binders, inner shadowing outer ---
     (:name nested-flet-let
      :source "(flet ((f (x) (let ((x (* x 2))) @x))) (f 3))"
      :marker "@"
      :expect :local
      :binder "((x ("
+     :binder-name "x"
      :note "inner LET shadows FLET's parameter")
     ;; --- FOREIGN cases ---
     (:name free-variable
@@ -179,7 +200,8 @@ where END = START + (length BINDER-NEEDLE)."
      :source "(multiple-value-bind (a b) (values 1 2) (+ @a b))"
      :marker "@"
      :expect :local
-     :binder "a")
+     :binder "(a b"
+     :binder-name "a")
     ;; --- Optional / keyword params ---
     (:name optional-param
      :source "(defun f (a &optional (b 10)) (+ a @b))"

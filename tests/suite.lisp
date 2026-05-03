@@ -17,7 +17,8 @@
             (expected-end nil))
         (when (eq expected-kind :local)
           (multiple-value-bind (s e)
-              (expected-binder-range source (getf case :binder))
+              (expected-binder-range source (getf case :binder)
+                                     (getf case :binder-name))
             (setf expected-start s expected-end e)))
         (let ((ok-p
                 (and (eq kind expected-kind)
@@ -36,9 +37,9 @@
                           expected-kind expected-start expected-end)
         (run-corpus-case case)
       (declare (ignore reason))
-      (is ok-p
-          "case ~A: got (~S ~S ~S), expected (~S ~S ~S)~@[~%  note: ~A~]"
-          (getf case :name)
-          kind start end
-          expected-kind expected-start expected-end
-          (getf case :note)))))
+      (is-true ok-p
+               "case ~A: got (~S ~S ~S), expected (~S ~S ~S)~@[~%  note: ~A~]"
+               (getf case :name)
+               kind start end
+               expected-kind expected-start expected-end
+               (getf case :note)))))

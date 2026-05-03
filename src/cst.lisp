@@ -13,8 +13,12 @@
   "Read every top-level form in SOURCE-STRING, returning a list of CST nodes.
 
 Each node carries source-position metadata: a `(start . end)` cons of
-character positions in the input stream (1-based). Forms before
-:START or after :END are not read.
+**character positions** (0-based, end-exclusive — i.e. half-open
+intervals matching Lisp's standard subseq convention). Eclector counts
+character reads; UTF-16 / byte-offset translation is the LSP layer's
+problem, not ours.
+
+Forms before :START or after :END are not read.
 
 Returns NIL if SOURCE-STRING contains no readable forms in the range."
   (let ((eclector.base:*client*
