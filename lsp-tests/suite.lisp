@@ -20,5 +20,8 @@
 (def-suite wire-suite :in all-tests
   :description "End-to-end LSP wire tests.")
 
+(def-suite local-definition-suite :in all-tests
+  :description "Local jump-to-def via cl-scope-resolver — wire-level integration.")
+
 (defun run-all ()
   (run! 'all-tests))

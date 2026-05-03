@@ -31,6 +31,7 @@
                (:file "client")
                (:file "position-tests")
                (:file "document-tests")
-               (:file "wire-tests"))
+               (:file "wire-tests")
+               (:file "local-definition-tests"))
   :perform (test-op (op c)
              (uiop:symbol-call :fiveam :run! (uiop:find-symbol* :all-tests :swank-lsp/tests))))
