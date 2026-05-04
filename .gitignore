@@ -1,4 +1,5 @@
 .qlot/
+tmp/
 *.fasl
 *.fas
 *.lx64fsl

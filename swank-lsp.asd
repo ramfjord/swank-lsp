@@ -15,6 +15,7 @@
   :pathname "src/"
   :serial t
   :components ((:file "package")
+               (:file "jsonrpc-byte-fix")
                (:file "position")
                (:file "document")
                (:file "handlers")
