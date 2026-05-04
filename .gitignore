@@ -13,5 +13,6 @@ tmp/
 .#*
 .swank-port
 .swank-session
+.swank-lsp-port
 .vlime-port
 .mcp.json

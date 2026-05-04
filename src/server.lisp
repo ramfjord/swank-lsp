@@ -116,8 +116,13 @@ Returns the RUNNING-SERVER instance."
                                 :output (or output *standard-output*))
          rs)))))
 
+(defvar *published-port-file* nil
+  "Pathname of the .swank-lsp-port file we wrote, so STOP-SERVER can
+clean it up. Bound by START-AND-PUBLISH; nil otherwise.")
+
 (defun stop-server ()
-  "Stop the running server, if any. Returns T if a server was stopped."
+  "Stop the running server, if any. Returns T if a server was stopped.
+If START-AND-PUBLISH wrote a port-file, delete it on stop."
   (let ((rs *server*))
     (unless rs
       (return-from stop-server nil))
@@ -127,7 +132,33 @@ Returns the RUNNING-SERVER instance."
             (bordeaux-threads:destroy-thread thread)))
       (error () nil))
     (setf *server* nil)
+    (when *published-port-file*
+      (handler-case (delete-file *published-port-file*) (error () nil))
+      (setf *published-port-file* nil))
     t))
+
+(defun start-and-publish (&key (port 0) (host "127.0.0.1")
+                               (port-file ".swank-lsp-port"))
+  "Start a TCP LSP server and write the bound port to PORT-FILE.
+
+PORT-FILE is resolved relative to *DEFAULT-PATHNAME-DEFAULTS* (so call
+this from your project root, or pass an absolute path). PORT 0 picks
+a free port; the actual bound port goes into the file.
+
+The convention -- mirroring how swank's bootstrap script writes
+.swank-port -- is that any consumer (editor, tooling, attach shim)
+discovers the port by reading the file, not by hardcoding it. Stop-
+server deletes the file so a stale .swank-lsp-port can never point
+at a dead listener."
+  (let* ((rs (start-server :transport :tcp :port port :host host))
+         (bound (running-server-port rs))
+         (path (merge-pathnames port-file)))
+    (with-open-file (out path :direction :output
+                              :if-exists :supersede
+                              :if-does-not-exist :create)
+      (format out "~A~%" bound))
+    (setf *published-port-file* path)
+    rs))
 
 ;;;; signal-server-exit hook (filled in here, called from exit-handler)
 

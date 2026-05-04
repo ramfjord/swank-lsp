@@ -3,6 +3,7 @@
   (:export
    ;; lifecycle
    #:start-server
+   #:start-and-publish
    #:stop-server
    #:*server*
    ;; introspection (mostly for tests / debugging)

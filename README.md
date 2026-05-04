@@ -35,23 +35,48 @@ In your `~/.sbclrc` (or a one-shot startup file):
 ```lisp
 (ql:quickload :swank-lsp)
 (swank:create-server :port 4005 :dont-close t)         ; vlime port
-(swank-lsp:start-server :transport :tcp :port 7777)    ; LSP port
+;; start-and-publish writes .swank-lsp-port to the project root so the
+;; editor (and any other consumer) can discover the port without an
+;; env var. Mirrors how swank's bootstrap publishes .swank-port and
+;; vlime's .vlime-port.
+(let ((*default-pathname-defaults*
+        (truename "~/projects/swank-lsp/")))
+  (swank-lsp:start-and-publish :port 7777))            ; or :port 0
 ```
 
-In your shell, before launching nvim:
+The nvim plugin discovers the port in this order:
 
-```sh
-export SWANK_LSP_PORT=7777
-```
+1. `$SWANK_LSP_PORT` env var (override; useful for quick testing)
+2. `~/projects/swank-lsp/.swank-lsp-port` (the convention)
+3. fallback to auto-spawn (Mode 2 below)
 
-The nvim plugin (see `nvim-plugin/swank-lsp.lua`) detects the env var
-and uses `bin/swank-lsp-attach.sh` (a `socat` shim) to bridge nvim's
-stdio LSP to your image's TCP listener. Multiple nvim windows can
-attach to the same image.
+If discovery succeeds, the plugin runs `bin/swank-lsp-attach.sh`
+(a `socat` shim) to bridge nvim's stdio LSP to the image's TCP
+listener. Multiple nvim windows can attach to the same image.
+
+`stop-server` deletes `.swank-lsp-port` so a stale file can never
+point at a dead listener.
 
 When you eval a `defmacro` in vlime, the LSP sees it on the next
 request — `gd` on a macro-introduced binding (`via-macros` path) just
 works.
+
+### Discovery convention (for any tool, not just nvim)
+
+Anything that wants to talk to a swank-lsp running in someone's
+image should:
+
+1. Read `.swank-lsp-port` from the project root.
+2. Connect to `127.0.0.1:<port>` and speak LSP over the socket.
+3. Treat absence of the file as "no LSP up; either fall back or skip."
+
+Same idea swank uses (`.swank-port`) and Vlime (`.vlime-port`): the
+image publishes its discoverable listeners to the filesystem;
+consumers never invent ports. If you (or another agent) want to
+modify the image's behavior, do it through the filesystem — edit a
+file, reload via `(asdf:load-system :swank-lsp :force '(:swank-lsp))`
+or `(claude-tools:reload-form ...)` — not by rewriting symbols
+through eval. Keeps the image and the on-disk truth in sync.
 
 ### Mode 2: auto-spawn (zero-config, slower)
 
