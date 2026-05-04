@@ -133,6 +133,7 @@ is a string naming the buffer's package (e.g. \"CL-USER\")."
             (gethash "change"    sync-options) 1)
       (setf (gethash "textDocumentSync" caps) sync-options)
       (setf (gethash "definitionProvider" caps) t)
+      (setf (gethash "referencesProvider" caps) t)
       (setf (gethash "hoverProvider"      caps) t)
       ;; completionProvider with trigger characters that make sense for Lisp.
       (setf (gethash "triggerCharacters" completion-options)
@@ -376,6 +377,85 @@ macro chain to its defmacro."
     (setf (gethash "uri" h) uri
           (gethash "range" h) range)
     h))
+
+;;;; textDocument/references
+;;;;
+;;;; v0: local references only. For a cursor on a let-bound (or
+;;;; lambda-, dolist-, etc.) name, return every other use of the SAME
+;;;; binder in the same source. Cross-file / global references would
+;;;; need swank's xref machinery; deferred.
+;;;;
+;;;; Algorithm: cl-scope-resolver tells us which binder the cursor's
+;;;; symbol points at. We then scan the source for every textual
+;;;; occurrence of the binder NAME, call resolve at each candidate,
+;;;; and keep those whose binder range matches the cursor's. Naive
+;;;; O(matches * resolve-cost) but the candidate set is small (just
+;;;; the textual occurrences of one specific name), and cursor on a
+;;;; same-name binder in a different scope filters out automatically
+;;;; because resolve gives a different binder range there.
+
+(defun references-handler (params)
+  (let ((ctx (build-defn-ctx params)))
+    (or (and ctx (local-references ctx))
+        +json-null+)))
+
+(defun local-references (ctx)
+  "Find all references to the binder at the cursor. Returns an array
+of LSP Locations, or NIL if cursor is not on a local binding."
+  (let* ((text  (defn-ctx-text ctx))
+         (sym-start (defn-ctx-sym-start ctx))
+         (uri   (defn-ctx-uri ctx))
+         (line-starts (defn-ctx-line-starts ctx))
+         (prov  (handler-case (cl-scope-resolver:resolve text sym-start)
+                  (error () nil))))
+    (unless (and prov (typep prov 'cl-scope-resolver:local))
+      (return-from local-references nil))
+    (let* ((b-start (cl-scope-resolver:local-start prov))
+           (b-end   (cl-scope-resolver:local-end   prov))
+           (name    (subseq text b-start b-end))
+           (refs '()))
+      (dolist (pos (token-positions text name))
+        (let ((p (handler-case (cl-scope-resolver:resolve text pos)
+                   (error () nil))))
+          (when (and p
+                     (typep p 'cl-scope-resolver:local)
+                     (= (cl-scope-resolver:local-start p) b-start)
+                     (= (cl-scope-resolver:local-end   p) b-end))
+            (push (lsp-location-from-range
+                   uri
+                   (char-range->lsp-range
+                    text pos (+ pos (length name))
+                    :encoding *server-position-encoding*
+                    :line-starts line-starts))
+                  refs))))
+      (nreverse refs))))
+
+(defun token-positions (text name)
+  "Positions in TEXT where NAME appears as a complete token (not as a
+substring of a longer identifier). Linear scan."
+  (let ((positions '())
+        (len (length name))
+        (i 0))
+    (loop
+      (let ((found (search name text :start2 i)))
+        (unless found (return (nreverse positions)))
+        (let ((before (and (plusp found) (char text (1- found))))
+              (after  (and (< (+ found len) (length text))
+                           (char text (+ found len)))))
+          (unless (or (lisp-symbol-char-p before)
+                      (lisp-symbol-char-p after))
+            (push found positions)))
+        (setf i (1+ found))))))
+
+(defun lisp-symbol-char-p (c)
+  "T if C is a character that can appear inside a CL symbol name (so
+finding NAME adjacent to it would be matching part of a longer
+identifier, not the symbol itself)."
+  (and c (not (or (member c '(#\Space #\Newline #\Tab #\Return
+                              #\( #\) #\' #\` #\, #\; #\" #\#))
+                  ;; brackets/braces aren't standard CL but treat as
+                  ;; separators since they appear in some sources
+                  (member c '(#\[ #\] #\{ #\}))))))
 
 (defun system-symbol-p (sym)
   "T if SYM lives in an implementation/standard package whose contents

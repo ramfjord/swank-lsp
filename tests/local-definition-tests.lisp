@@ -328,3 +328,61 @@ first."
                      (is (not (search "/usr/share/sbcl" uri))
                          "Filter failed: chain leaked SBCL system path ~S" uri)))))))
       (ignore-errors (delete-file macro-file)))))
+
+;;; --- textDocument/references (gr) for local bindings ---
+
+(defun references-at (sock uri line character &key (include-declaration t))
+  "Send textDocument/references for URI at (LINE, CHARACTER), return result."
+  (let* ((params (make-hash-table :test 'equal))
+         (td (make-hash-table :test 'equal))
+         (pos (make-hash-table :test 'equal))
+         (ctx (make-hash-table :test 'equal)))
+    (setf (gethash "uri" td) uri)
+    (setf (gethash "line" pos) line
+          (gethash "character" pos) character)
+    (setf (gethash "includeDeclaration" ctx) include-declaration)
+    (setf (gethash "textDocument" params) td
+          (gethash "position" params) pos
+          (gethash "context" params) ctx)
+    (gethash "result"
+             (send-and-receive sock "textDocument/references" :params params))))
+
+(test references-on-let-bound-finds-binder-and-all-uses
+  (let ((uri "file:///tmp/wire-refs-let.lisp")
+        ;; Source contains 1 binder + 3 uses of `x'.
+        ;;
+        ;; "(let ((x 1))     " 0..16
+        ;; "  (list x x (* 2 x)))" 17..40
+        (text "(let ((x 1))
+  (list x x (* 2 x)))"))
+    (with-defn-fixture (sock uri text)
+      ;; Cursor on the use of x at line 1 character 8 (the first `x' use)
+      (let ((result (references-at sock uri 1 8)))
+        (is (and (consp result) (= 4 (length result)))
+            "Expected 4 references (1 binder + 3 uses), got ~A" result)))))
+
+(test references-on-shadowed-binder-finds-only-inner-scope
+  (let ((uri "file:///tmp/wire-refs-shadow.lisp")
+        (text "(let ((x 1))
+  (let ((x 2))
+    (list x x)))"))
+    (with-defn-fixture (sock uri text)
+      ;; Cursor on the inner `x' use at line 2, character 10 (first x in body)
+      (let ((result (references-at sock uri 2 10)))
+        ;; Inner scope: 1 binder (line 1, char 9) + 2 uses on line 2.
+        ;; Outer x (line 0) must NOT appear because it's a different binder.
+        (is (and (consp result) (= 3 (length result)))
+            "Expected 3 references in inner scope only, got ~A" result)
+        (let ((lines (mapcar (lambda (loc)
+                               (gethash "line" (gethash "start" (gethash "range" loc))))
+                             result)))
+          (is (not (member 0 lines))
+              "Outer-scope binder (line 0) should not appear; got lines ~A" lines))))))
+
+(test references-on-non-local-returns-null
+  (let ((uri "file:///tmp/wire-refs-none.lisp")
+        (text "(list 1 2 3)"))
+    (with-defn-fixture (sock uri text)
+      (let ((result (references-at sock uri 0 1)))   ; cursor on `list'
+        (is (or (eq result :null) (null result))
+            "Non-local cursor should return null, got ~A" result)))))
