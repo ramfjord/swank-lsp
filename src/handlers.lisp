@@ -347,7 +347,8 @@ user macro in the chain. Returns NIL if the chain is empty after
 filtering implementation packages, or if swank has no source for the
 macro."
   (let* ((chain (cl-scope-resolver:via-macros-chain via-macros))
-         (user-macros (remove-if #'system-symbol-p chain))
+         (names (cl-scope-resolver:chain-macro-names chain))
+         (user-macros (remove-if #'system-symbol-p names))
          (innermost (car (last user-macros))))
     (when innermost
       (swank-definitions-of (symbol-name innermost) (defn-ctx-pkg ctx)))))

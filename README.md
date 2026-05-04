@@ -1,12 +1,15 @@
 # swank-lsp
 
-A Common Lisp LSP server that uses **swank as its engine** and speaks
-**vanilla LSP** to any editor.
+A Common Lisp language server aiming to be the best one there is.
+Uses **swank as its engine** and speaks **vanilla LSP** to any editor.
 
-Goal: a swank-grade Lisp development experience in any editor with an
-LSP client — not just Emacs (SLIME), nvim (vlime/nvlime), or VS Code
-(alive). Inherits every swank contrib for free; vlime/nvlime can
-attach to the same image in parallel.
+Goal: the best language server for Common Lisp, period — in any
+editor with an LSP client, not just Emacs (SLIME), nvim
+(vlime/nvlime), or VS Code (alive). Swank is the engine because
+it's the right engine: a live image, every contrib for free,
+parallel attach from vlime/nvlime to the same image. The bar isn't
+parity with SLIME; it's exceeding what any current Lisp environment
+delivers, and doing it portably.
 
 Headline feature: jump-to-definition that resolves **local lexical
 bindings**, including binders introduced by macros — a feature SLIME's
@@ -18,6 +21,37 @@ for the analysis half.
 **Status:** working for `gd` (local + global + via-macros),
 `K` (hover), `gK` (signatureHelp), and completion in nvim. References
 (`gr`), diagnostics, code actions are not implemented yet.
+
+## Direction
+
+The North Star is making Lisp's meta-level *visible* in the editor.
+When a binding comes from a chain of macro expansions, the editor
+should walk you through it: "this variable is bound by macro A, which
+expanded to macro B, which expanded to a `let` here." A side pane
+shows each expansion step with the relevant slice highlighted; you
+can stop at any layer.
+
+The chain isn't a static list of snapshots — it animates. Each macro
+visibly expands in place, so you watch the chain unfold rather than
+read a final result. The bet: if macros are obvious enough to follow,
+people stop complaining about them. That's the goal — make macros
+easy enough to read that they stop being a tax on collaboration.
+
+The data already exists — `cl-scope-resolver` materializes the
+via-macros chain when it resolves a binding (`expand-prov`,
+`produced-by`, `expansion-list`). What's missing is the transport
+and the editor surface. Vanilla LSP has no primitive for "show me
+the macro expansion," so this feature will live as a custom request
+with editor-specific UI built on top. Vanilla LSP keeps the basics
+portable; the expansion-explorer is where we deliberately leave
+the standard to deliver something no current Lisp environment
+offers, in any editor.
+
+This is a North Star, not a near-term plan. Captured here because
+it shapes upstream choices: provenance in `cl-scope-resolver` is
+user-facing data, not just an internal invariant; and the LSP layer
+will eventually grow a small custom-request surface that earns its
+keep by surfacing the meta-level.
 
 ## Running it
 
