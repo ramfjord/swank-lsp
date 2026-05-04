@@ -39,32 +39,31 @@ multi-byte."
           ((< cc #x10000) 3)
           (t              4))))
 
-(defun byte-correct-read-message (stream)
-  "Replacement for jsonrpc/request-response::read-message that
-honors Content-Length as bytes, not characters.
+(defun read-body-of-byte-length (stream byte-length)
+  "Read characters from STREAM until their cumulative UTF-8 byte width
+totals BYTE-LENGTH; return the accumulated string. STREAM is a
+character stream; BYTE-LENGTH counts bytes, not characters, because
+that is the unit the HTTP-style framing uses for Content-Length --
+ASCII characters are 1 byte each but a single em-dash is 3, and
+treating those as equal undercounts the byte stream and corrupts
+the next message's header parse."
+  (with-output-to-string (body)
+    (loop with remaining = byte-length
+          while (plusp remaining)
+          for c = (read-char stream nil nil)
+          while c
+          do (write-char c body)
+             (decf remaining (utf8-byte-width c)))))
 
-Reads the headers via the upstream read-headers (which is fine --
-LSP headers are pure ASCII), then reads characters from STREAM and
-accumulates them into the body until their UTF-8 byte width totals
-LENGTH. Returns the parsed message via the upstream parse-message."
+(defun byte-correct-read-message (stream)
+  "Replacement for jsonrpc/request-response::read-message. Same shape
+as the upstream original but reads the body by UTF-8 byte width."
   (let* ((headers (funcall (find-symbol "READ-HEADERS" :jsonrpc/request-response)
                            stream))
-         (raw-length (gethash "content-length" headers))
-         (length (and raw-length (ignore-errors (parse-integer raw-length)))))
+         (length (ignore-errors (parse-integer (gethash "content-length" headers)))))
     (when length
-      (let ((body (make-string-output-stream))
-            (bytes-read 0))
-        (loop while (< bytes-read length)
-              for c = (read-char stream nil nil)
-              do (when (null c)
-                   ;; EOF before we got LENGTH bytes; bail with
-                   ;; whatever we have. Upstream's behavior on EOF
-                   ;; is also to return whatever was read.
-                   (return))
-                 (write-char c body)
-                 (incf bytes-read (utf8-byte-width c)))
-        (funcall (find-symbol "PARSE-MESSAGE" :jsonrpc/request-response)
-                 (get-output-stream-string body))))))
+      (funcall (find-symbol "PARSE-MESSAGE" :jsonrpc/request-response)
+               (read-body-of-byte-length stream length)))))
 
 (defun install-jsonrpc-byte-fix ()
   "Replace jsonrpc/request-response::read-message with our byte-correct
