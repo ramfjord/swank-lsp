@@ -15,7 +15,15 @@
   :pathname "src/"
   :serial t
   :components ((:file "package")
-               (:file "jsonrpc-byte-fix")
+               ;; jsonrpc-byte-fix removed: upstream PR (in tmp/jsonrpc/)
+               ;; fixes the byte-vs-char read in jsonrpc/request-response
+               ;; AND switches transports to binary streams. Our old
+               ;; monkey-patch redefined read-message to use read-char,
+               ;; which now errors on the binary streams the upstream
+               ;; transport passes -- "Connection reset by peer" on every
+               ;; wire test. Once the qlfile points at upstream-patched
+               ;; jsonrpc, the monkey-patch is both redundant and breaks
+               ;; things.
                (:file "position")
                (:file "document")
                (:file "handlers")

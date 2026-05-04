@@ -2,7 +2,6 @@ github cl-scope-resolver ramfjord/cl-scope-resolver
 ql eclector
 ql hu.dwim.walker
 ql fiveam
-ql jsonrpc
 ql slime
 
 ;; KNOWN ISSUE — qlot install does NOT follow package-inferred-system
@@ -16,3 +15,5 @@ ql slime
 ;; previous .qlot/ that worked was built up incrementally during dev
 ;; and isn't reproducible from this qlfile alone. To be addressed
 ;; separately; not a regression from the cl-scope-resolver split.
+local jsonrpc /home/tramfjord/projects/swank-lsp/tmp/jsonrpc/
+ql flexi-streams
