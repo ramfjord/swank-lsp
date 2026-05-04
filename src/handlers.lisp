@@ -239,69 +239,156 @@ serverCapabilities. Test verifies our ack of full sync."
 ;;;; or sometimes (:error "msg") for the location.
 ;;;; :position is a 1-based file character offset (CL FILE-POSITION).
 
+;;;; textDocument/definition
+;;;;
+;;;; "Where is this symbol defined?" is one question with several
+;;;; possible sources of answer. We try them in order; the first
+;;;; non-NIL Location wins.
+;;;;
+;;;; Strategies (in order):
+;;;;   1. CL-SCOPE-RESOLVER  — pure-source analysis. Handles both
+;;;;        LOCAL bindings (binder visible in this document) and
+;;;;        VIA-MACROS bindings (chain to a defmacro that introduces
+;;;;        the binding; we jump to the defmacro of the innermost
+;;;;        user macro in the chain via swank lookup).
+;;;;   2. SWANK              — ask the running image where the symbol
+;;;;        is defined globally.
+;;;;
+;;;; Each strategy is a function (defn-ctx) -> Location | Location[] | NIL.
+;;;; Adding a new source (project tags, symbol index, …) is one new
+;;;; strategy function added to *DEFINITION-STRATEGIES*.
+
+(defstruct defn-ctx
+  "Inputs every definition strategy needs. Built once per request."
+  doc text uri sym sym-start line-starts pkg)
+
+(defun build-defn-ctx (params)
+  "Extract everything strategies need from the LSP request. Returns a
+DEFN-CTX, or NIL if the request can't be answered (no doc, cursor not
+on a symbol)."
+  (let ((doc (document-from-params params :error-on-missing nil)))
+    (when doc
+      (let* ((text (document-text doc))
+             (uri  (text-document-uri params)))
+        (multiple-value-bind (line character) (position-of params)
+          (let* ((line-starts (compute-line-starts text))
+                 (offset (lsp-position->char-offset
+                          text line character
+                          :encoding *server-position-encoding*
+                          :line-starts line-starts)))
+            ;; extract-symbol-at is forgiving about cursor placement
+            ;; (works even when cursor is just past the symbol's end).
+            ;; The resolver requires an offset *inside* the symbol;
+            ;; we always give it sym-start.
+            (multiple-value-bind (sym sym-start sym-end)
+                (extract-symbol-at text offset)
+              (declare (ignore sym-end))
+              (when (and sym (plusp (length sym)))
+                (make-defn-ctx :doc doc :text text :uri uri
+                               :sym sym :sym-start sym-start
+                               :line-starts line-starts
+                               :pkg (current-package-for-document doc))))))))))
+
+(defparameter *definition-strategies*
+  '(definition-via-resolver
+    definition-via-swank)
+  "Strategies tried in order by DEFINITION-HANDLER. Each is a function
+of (DEFN-CTX) returning a Location, an array of Locations, or NIL.
+First non-NIL wins.")
+
 (defun definition-handler (params)
-  (let* ((doc (document-from-params params :error-on-missing nil)))
-    (unless doc (return-from definition-handler +json-null+))
-    (let ((text (document-text doc))
-          (uri (text-document-uri params)))
-      (multiple-value-bind (line character) (position-of params)
-        (let* ((line-starts (compute-line-starts text))
-               (offset (lsp-position->char-offset
-                        text line character
-                        :encoding *server-position-encoding*
-                        :line-starts line-starts)))
-          ;; Use extract-symbol-at to get the symbol's start, so cursor
-          ;; placement is forgiving (cursor-just-past-end still works).
-          ;; The resolver requires an offset *inside* the symbol, which
-          ;; the raw LSP-derived offset won't always satisfy.
-          (multiple-value-bind (sym sym-start sym-end)
-              (extract-symbol-at text offset)
-            (declare (ignore sym-end))
-            (unless (and sym (plusp (length sym)))
-              (return-from definition-handler +json-null+))
-            ;; --- (1) LOCAL branch: try resolver first ---
-            (let ((local (try-local-resolution text sym-start uri line-starts)))
-              (when local (return-from definition-handler local)))
-            ;; --- (2) FOREIGN branch: existing swank path ---
-            (let* ((pkg (current-package-for-document doc))
-                   (defs (handler-case
-                             (with-swank-buffer-package (pkg)
-                               (swank:find-definitions-for-emacs sym))
-                           (error () nil))))
-              (let ((locations
-                      (loop for entry in defs
-                            for loc = (and (consp entry) (second entry))
-                            for url-and-range
-                              = (definition-entry->location-info loc pkg)
-                            when url-and-range
-                              collect (apply #'make-lsp-location url-and-range))))
-                (cond
-                  ((null locations) +json-null+)
-                  ((= 1 (length locations)) (first locations))
-                  (t locations))))))))))
+  (let ((ctx (build-defn-ctx params)))
+    (or (and ctx
+             (some (lambda (strat) (funcall strat ctx))
+                   *definition-strategies*))
+        +json-null+)))
 
-(defun try-local-resolution (text sym-start uri line-starts)
-  "Ask cl-scope-resolver about the symbol at SYM-START in TEXT. If it
-returns :LOCAL, build a same-document Location pointing at the binder.
-Otherwise (any :FOREIGN reason, OR resolver itself errors out), return
-NIL so the caller falls through to swank.
+(defun definition-via-resolver (ctx)
+  "Strategy: ask cl-scope-resolver. Returns a Location or NIL.
 
-We swallow resolver errors deliberately: an exception in the local
-branch should not prevent the swank path from getting its chance."
-  (multiple-value-bind (kind start end reason)
-      (handler-case
-          (cl-scope-resolver:resolve text sym-start)
-        (error () (values :foreign nil nil :resolver-error)))
-    (declare (ignore reason))
-    (when (and (eq kind :local) start end)
-      (let ((range (char-range->lsp-range
-                    text start end
-                    :encoding *server-position-encoding*
-                    :line-starts line-starts))
-            (h (make-hash-table :test 'equal)))
-        (setf (gethash "uri" h) uri
-              (gethash "range" h) range)
-        h))))
+The resolver returns a discriminated-union PROVENANCE:
+  LOCAL       — binder visible in this document; build a same-doc Location.
+  VIA-MACROS  — binder introduced by macroexpansion; the chain names
+                the macros responsible. We jump to the *innermost user
+                macro* in the chain (skipping CL/SB-* implementation
+                macros) by asking swank where its defmacro lives.
+  NONE        — no actionable answer; fall through.
+
+Resolver errors are swallowed: the swank strategy is the backstop."
+  (let ((prov (handler-case
+                  (cl-scope-resolver:resolve (defn-ctx-text ctx)
+                                             (defn-ctx-sym-start ctx))
+                (error () nil))))
+    (etypecase prov
+      (null nil)
+      (cl-scope-resolver:local      (location-from-local-binder prov ctx))
+      (cl-scope-resolver:via-macros (location-from-macro-chain prov ctx))
+      (cl-scope-resolver:none       nil))))
+
+(defun definition-via-swank (ctx)
+  "Strategy: ask swank's FIND-DEFINITIONS-FOR-EMACS about the symbol
+at the cursor. Returns a Location, an array of Locations, or NIL."
+  (swank-definitions-of (defn-ctx-sym ctx) (defn-ctx-pkg ctx)))
+
+(defun location-from-local-binder (local ctx)
+  "LOCAL provenance → same-doc Location at the binder name."
+  (let ((range (char-range->lsp-range
+                (defn-ctx-text ctx)
+                (cl-scope-resolver:local-start local)
+                (cl-scope-resolver:local-end local)
+                :encoding *server-position-encoding*
+                :line-starts (defn-ctx-line-starts ctx))))
+    (lsp-location-from-range (defn-ctx-uri ctx) range)))
+
+(defun location-from-macro-chain (via-macros ctx)
+  "VIA-MACROS provenance → Location of the defmacro of the innermost
+user macro in the chain. Returns NIL if the chain is empty after
+filtering implementation packages, or if swank has no source for the
+macro."
+  (let* ((chain (cl-scope-resolver:via-macros-chain via-macros))
+         (user-macros (remove-if #'system-symbol-p chain))
+         (innermost (car (last user-macros))))
+    (when innermost
+      (swank-definitions-of (symbol-name innermost) (defn-ctx-pkg ctx)))))
+
+(defun swank-definitions-of (sym-name pkg)
+  "Ask swank for SYM-NAME's source location(s). Returns a single
+Location, an array of Locations, or NIL. Used by both the swank
+strategy directly and by the resolver strategy when it's chasing a
+macro chain to its defmacro."
+  (let* ((defs (handler-case
+                   (with-swank-buffer-package (pkg)
+                     (swank:find-definitions-for-emacs sym-name))
+                 (error () nil)))
+         (locations (loop for entry in defs
+                          for loc = (and (consp entry) (second entry))
+                          for url-and-range = (definition-entry->location-info loc pkg)
+                          when url-and-range
+                            collect (apply #'make-lsp-location url-and-range))))
+    (cond
+      ((null locations) nil)
+      ((= 1 (length locations)) (first locations))
+      (t locations))))
+
+(defun lsp-location-from-range (uri range)
+  "Wrap an existing LSP Range in a Location."
+  (let ((h (make-hash-table :test 'equal)))
+    (setf (gethash "uri" h) uri
+          (gethash "range" h) range)
+    h))
+
+(defun system-symbol-p (sym)
+  "T if SYM lives in an implementation/standard package whose contents
+we don't want to surface as a definition target. Filters COMMON-LISP,
+KEYWORD, and SB-* (SBCL implementation packages); user packages and
+COMMON-LISP-USER pass through."
+  (let ((p (symbol-package sym)))
+    (when p
+      (let ((name (package-name p)))
+        (or (string= name "COMMON-LISP")
+            (string= name "KEYWORD")
+            (and (>= (length name) 3)
+                 (string= name "SB-" :end1 3)))))))
 
 (defun make-lsp-location (uri start-line start-char end-line end-char)
   (let ((h (make-hash-table :test 'equal)))

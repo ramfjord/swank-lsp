@@ -1,4 +1,4 @@
-local cl-scope-resolver /home/tramfjord/projects/cl-scope-resolver/
+github cl-scope-resolver ramfjord/cl-scope-resolver
 ql eclector
 ql hu.dwim.walker
 ql fiveam
@@ -11,12 +11,8 @@ ql slime
 ;; will leave the swank-lsp suite unable to load (cl+ssl, fast-io,
 ;; flexi-streams, static-vectors, lw-compat, ... all missing).
 ;;
-;; Workaround for a fresh checkout: either (a) `qlot add` each missing
-;; transitive dep until it loads, or (b) wrap the entrypoint in
-;; `ql:quickload :swank-lsp` before `asdf:load-system`, since
-;; quickload has lazy resolution. The previous (working) .qlot/
-;; directory was built up incrementally over Phase 1+2 dev and
-;; couldn't be reproduced from this qlfile alone.
-;;
-;; This is a pre-existing qlot limitation, not a regression from the
-;; cl-scope-resolver split.
+;; Workaround: wrap the entrypoint in `ql:quickload :swank-lsp` before
+;; `asdf:load-system` — quickload has lazy transitive resolution. The
+;; previous .qlot/ that worked was built up incrementally during dev
+;; and isn't reproducible from this qlfile alone. To be addressed
+;; separately; not a regression from the cl-scope-resolver split.

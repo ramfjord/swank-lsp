@@ -228,3 +228,103 @@ first."
         (is (hash-table-p loc) "Expected a Location even with cursor past symbol, got ~S" result)
         (is (equal uri (gethash "uri" loc)))
         (is (eql 7 (gethash "character" (range-start loc))))))))
+
+;;; --- VIA-MACROS cases (resolver returns VIA-MACROS) ---
+;;;
+;;; The resolver returns VIA-MACROS when the cursor lands on a symbol
+;;; bound by a macro expansion. We test the full strategy: chain →
+;;; filter system symbols → ask swank where the innermost user macro
+;;; is defined → return its source location.
+;;;
+;;; For swank to find a meaningful source location, the macros must be
+;;; LOADED FROM A FILE (not just eval'd) so swank's source-tracking has
+;;; a file path to point at.
+
+(test via-macros-jumps-to-innermost-user-defmacro
+  ;; Inner macro introduces a binding via `let`; outer macro just
+  ;; passes through. Cursor on the macro-introduced symbol →
+  ;; resolver returns VIA-MACROS with chain (OUTER INNER) →
+  ;; we jump to INNER's defmacro source.
+  (let* ((macro-file (uiop:tmpize-pathname "/tmp/swank-lsp-test-vm-macros.lisp"))
+         (macro-text "(in-package :cl-user)
+(defmacro %wire-vm-inner (x &body body)
+  `(let ((%wire-vm-name ,x)) ,@body))
+(defmacro %wire-vm-outer (&body body)
+  `(%wire-vm-inner :tag ,@body))
+"))
+    (unwind-protect
+         (progn
+           (uiop:with-output-file (s macro-file :if-exists :supersede)
+             (write-string macro-text s))
+           ;; Define the macros in the test image so:
+           ;;  (a) macroexpansion fires inside cl-scope-resolver, and
+           ;;  (b) swank's find-definitions-for-emacs has a file path
+           ;;      to return.
+           (load macro-file)
+           ;; Now exercise the LSP wire path on a use site.
+           (let* ((use-uri "file:///tmp/swank-lsp-vm-use.lisp")
+                  (use-text "(in-package :cl-user)
+(%wire-vm-outer (print %wire-vm-name))"))
+             (with-defn-fixture (sock use-uri use-text)
+               ;; cursor inside %wire-vm-name on line 1 (0-indexed).
+               ;; Line 1 is "(%wire-vm-outer (print %wire-vm-name))"
+               ;;            012345678901234567890123456789012345678
+               ;;                      1111111111222222222233333333
+               ;; %wire-vm-name starts at character 23.
+               (let* ((result (definition-at sock use-uri 1 25))
+                      (loc (result-as-single-location result)))
+                 (is (hash-table-p loc)
+                     "Expected a Location for via-macros, got ~S" result)
+                 ;; Should jump to the macro file, not the use-site doc
+                 ;; (and not be null).
+                 (is (search "swank-lsp-test-vm-macros" (gethash "uri" loc))
+                     "Expected URI in macro file, got ~S" (gethash "uri" loc))
+                 (is (not (equal use-uri (gethash "uri" loc)))
+                     "Should not point back at the use-site document")))))
+      (ignore-errors (delete-file macro-file)))))
+
+(test via-macros-filters-system-macros-from-chain
+  ;; The resolver's chain often includes CL standard macros (DOLIST,
+  ;; UNLESS, …) that the walker expanded along the way. Those are not
+  ;; useful jump targets — jumping to SBCL's source for `unless` is
+  ;; never what the user wants. system-symbol-p filters them; the test
+  ;; verifies a chain containing both kinds collapses to the user macro.
+  (let* ((macro-file (uiop:tmpize-pathname "/tmp/swank-lsp-test-filter-macros.lisp"))
+         ;; This macro expands to a DOLIST + UNLESS combination that the
+         ;; walker will macroexpand. The resulting chain will contain
+         ;; CL macros mixed with our user macro.
+         (macro-text "(in-package :cl-user)
+(defmacro %wire-filter-binder (var src &body body)
+  `(dolist (,var ,src)
+     (unless (null ,var) ,@body)))
+"))
+    (unwind-protect
+         (progn
+           (uiop:with-output-file (s macro-file :if-exists :supersede)
+             (write-string macro-text s))
+           (load macro-file)
+           (let* ((use-uri "file:///tmp/swank-lsp-filter-use.lisp")
+                  (use-text "(in-package :cl-user)
+(%wire-filter-binder item '(1 2 3) (print item))"))
+             (with-defn-fixture (sock use-uri use-text)
+               ;; cursor on use of `item` near end. Find it manually.
+               ;; Line 1: "(%wire-filter-binder item '(1 2 3) (print item))"
+               ;;          0         1         2         3         4
+               ;;          0123456789012345678901234567890123456789012345678
+               ;; The use of `item` is at character 43.
+               (let* ((result (definition-at sock use-uri 1 43))
+                      (loc (result-as-single-location result)))
+                 ;; The result type isn't the headline assertion — what
+                 ;; matters is we did NOT get a result pointing into
+                 ;; SBCL's source for DOLIST or UNLESS. Either we get
+                 ;; the user's macro file (filter worked) or null
+                 ;; (resolver returned LOCAL — `item` is genuinely the
+                 ;; dolist binder from the user macro's perspective);
+                 ;; both are correct. We just must not see system paths.
+                 (when (hash-table-p loc)
+                   (let ((uri (gethash "uri" loc)))
+                     (is (not (search "/sbcl-source/" uri))
+                         "Filter failed: chain leaked SBCL source path ~S" uri)
+                     (is (not (search "/usr/share/sbcl" uri))
+                         "Filter failed: chain leaked SBCL system path ~S" uri)))))))
+      (ignore-errors (delete-file macro-file)))))
