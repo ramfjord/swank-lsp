@@ -17,7 +17,7 @@
    #:compute-line-starts
    #:*server-position-encoding*))
 
-;; Internal symbols are reachable as swank-lsp::NAME — the tests use
+;; Internal symbols are reachable as swank-lsp::NAME -- the tests use
 ;; that form. We deliberately do NOT expose a separate "internal"
 ;; package; "double colons in tests" is an honest signal that those
 ;; helpers are not part of the public surface.

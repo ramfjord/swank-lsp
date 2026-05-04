@@ -56,7 +56,7 @@
                (swank-lsp::parse-in-package "(in-package \"FOO\")"))))
 
 (test parse-in-package-with-leading-comment-form
-  ;; The simple scanner doesn't truly skip comments — but if the
+  ;; The simple scanner doesn't truly skip comments -- but if the
   ;; in-package is the first paren-form we hit, it should still find it.
   (is (string-equal "BAR"
                     (swank-lsp::parse-in-package

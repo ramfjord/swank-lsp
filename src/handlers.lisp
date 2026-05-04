@@ -41,7 +41,7 @@ Keys: \"shutdown-requested\" (bool), \"client-pid\" (int|nil),
 (defun position-of (params &optional (key "position"))
   "Return (VALUES LINE CHARACTER) from the LSP Position hash-table at
 KEY in PARAMS. Returns (0 0) if the key is missing or the hash lacks
-line/character — defensive against clients that pass weird params."
+line/character -- defensive against clients that pass weird params."
   (let ((pos (gethash key params)))
     (cond
       ((hash-table-p pos)
@@ -149,7 +149,7 @@ is a string naming the buffer's package (e.g. \"CL-USER\")."
       result)))
 
 (defun initialized-handler (params)
-  "Notification — no response. PARAMS may be NIL or empty."
+  "Notification -- no response. PARAMS may be NIL or empty."
   (declare (ignore params))
   nil)
 
@@ -161,7 +161,7 @@ should be rejected (we don't enforce that strictly in v0)."
   +json-null+)
 
 (defun exit-handler (params)
-  "Notification — process should exit. We stop the server's transport;
+  "Notification -- process should exit. We stop the server's transport;
 the SBCL image continues (we can't sb-ext:exit because the LSP server
 might be running alongside swank in a long-lived dev image)."
   (declare (ignore params))
@@ -204,7 +204,7 @@ serverCapabilities. Test verifies our ack of full sync."
          (doc (lookup-document uri)))
     (cond
       ((null doc)
-       (warn "didChange for untracked URI ~A — ignoring" uri))
+       (warn "didChange for untracked URI ~A -- ignoring" uri))
       ((and changes (listp changes))
        ;; Last change wins for full-sync; iterate and replace.
        (dolist (change changes)
@@ -246,16 +246,16 @@ serverCapabilities. Test verifies our ack of full sync."
 ;;;; non-NIL Location wins.
 ;;;;
 ;;;; Strategies (in order):
-;;;;   1. CL-SCOPE-RESOLVER  — pure-source analysis. Handles both
+;;;;   1. CL-SCOPE-RESOLVER  -- pure-source analysis. Handles both
 ;;;;        LOCAL bindings (binder visible in this document) and
 ;;;;        VIA-MACROS bindings (chain to a defmacro that introduces
 ;;;;        the binding; we jump to the defmacro of the innermost
 ;;;;        user macro in the chain via swank lookup).
-;;;;   2. SWANK              — ask the running image where the symbol
+;;;;   2. SWANK              -- ask the running image where the symbol
 ;;;;        is defined globally.
 ;;;;
 ;;;; Each strategy is a function (defn-ctx) -> Location | Location[] | NIL.
-;;;; Adding a new source (project tags, symbol index, …) is one new
+;;;; Adding a new source (project tags, symbol index, ...) is one new
 ;;;; strategy function added to *DEFINITION-STRATEGIES*.
 
 (defstruct defn-ctx
@@ -307,12 +307,12 @@ First non-NIL wins.")
   "Strategy: ask cl-scope-resolver. Returns a Location or NIL.
 
 The resolver returns a discriminated-union PROVENANCE:
-  LOCAL       — binder visible in this document; build a same-doc Location.
-  VIA-MACROS  — binder introduced by macroexpansion; the chain names
+  LOCAL       -- binder visible in this document; build a same-doc Location.
+  VIA-MACROS  -- binder introduced by macroexpansion; the chain names
                 the macros responsible. We jump to the *innermost user
                 macro* in the chain (skipping CL/SB-* implementation
                 macros) by asking swank where its defmacro lives.
-  NONE        — no actionable answer; fall through.
+  NONE        -- no actionable answer; fall through.
 
 Resolver errors are swallowed: the swank strategy is the backstop."
   (let ((prov (handler-case
@@ -331,7 +331,7 @@ at the cursor. Returns a Location, an array of Locations, or NIL."
   (swank-definitions-of (defn-ctx-sym ctx) (defn-ctx-pkg ctx)))
 
 (defun location-from-local-binder (local ctx)
-  "LOCAL provenance → same-doc Location at the binder name."
+  "LOCAL provenance -> same-doc Location at the binder name."
   (let ((range (char-range->lsp-range
                 (defn-ctx-text ctx)
                 (cl-scope-resolver:local-start local)
@@ -341,7 +341,7 @@ at the cursor. Returns a Location, an array of Locations, or NIL."
     (lsp-location-from-range (defn-ctx-uri ctx) range)))
 
 (defun location-from-macro-chain (via-macros ctx)
-  "VIA-MACROS provenance → Location of the defmacro of the innermost
+  "VIA-MACROS provenance -> Location of the defmacro of the innermost
 user macro in the chain. Returns NIL if the chain is empty after
 filtering implementation packages, or if swank has no source for the
 macro."
@@ -598,7 +598,7 @@ Return a list of LSP CompletionItem hashes (without sorting)."
   "Walk backward from OFFSET looking for the operator of the innermost
 unclosed `(`. Conservative: scans for the nearest `(` not yet closed,
 then reads the symbol immediately following it. Doesn't handle string
-literals or comments specially — good enough for v0."
+literals or comments specially -- good enough for v0."
   (let ((depth 0)
         (p (1- offset)))
     (loop while (>= p 0) do

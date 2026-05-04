@@ -106,7 +106,7 @@ the predicate's last value (truthy on success, falsy on timeout)."
 (test definition-on-known-global-returns-location
   (with-test-server (port)
     (with-client-socket (sock port)
-      ;; A tiny lisp buffer using `cl:list` — global, definitely findable.
+      ;; A tiny lisp buffer using `cl:list` -- global, definitely findable.
       (initialize-and-open sock
                            :uri "file:///tmp/wire-def.lisp"
                            :text "(list 1 2 3)")

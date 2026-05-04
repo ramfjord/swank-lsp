@@ -126,7 +126,7 @@ exceeds the line's length in code units, clamps to the line end."
           (incf offset 1)))
       ;; If the requested code-unit offset lands inside a multi-unit
       ;; character, the loop will have consumed past it. That's the LSP
-      ;; spec's expected behavior — round to the next character.
+      ;; spec's expected behavior -- round to the next character.
       offset)))
 
 (defun line-end-without-terminator (text next-line-start)

@@ -70,8 +70,8 @@ corrupt the stdio LSP wire)."
                           input output)
   "Start the LSP server.
 TRANSPORT: :tcp or :stdio.
-For :tcp — PORT 0 picks a random free port (returned via SERVER-PORT).
-For :stdio — uses INPUT/OUTPUT (default *standard-input*/*standard-output*).
+For :tcp -- PORT 0 picks a random free port (returned via SERVER-PORT).
+For :stdio -- uses INPUT/OUTPUT (default *standard-input*/*standard-output*).
 Returns the RUNNING-SERVER instance."
   (when *server*
     (error "swank-lsp server is already running on ~A; call STOP-SERVER first."
@@ -134,7 +134,7 @@ Returns the RUNNING-SERVER instance."
 (defmethod signal-server-exit ()
   "Spawn a thread that stops the server shortly after exit-handler
 returns its (empty) response. We can't tear down the listening thread
-synchronously from inside a handler — destroy-thread on self is
+synchronously from inside a handler -- destroy-thread on self is
 unspecified and the response hasn't yet been written."
   (when *server*
     (bordeaux-threads:make-thread

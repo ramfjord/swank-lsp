@@ -1,6 +1,6 @@
 (in-package #:swank-lsp/tests)
 
-;;;; Aggregate runner. Fiveam's `run!` works on a *symbol* — either
+;;;; Aggregate runner. Fiveam's `run!` works on a *symbol* -- either
 ;;;; a single test or a suite. We define ALL-TESTS as the umbrella
 ;;;; suite that contains the three child suites, so `(run! 'all-tests)`
 ;;;; runs everything.
@@ -21,7 +21,7 @@
   :description "End-to-end LSP wire tests.")
 
 (def-suite local-definition-suite :in all-tests
-  :description "Local jump-to-def via cl-scope-resolver — wire-level integration.")
+  :description "Local jump-to-def via cl-scope-resolver -- wire-level integration.")
 
 (defun run-all ()
   (run! 'all-tests))

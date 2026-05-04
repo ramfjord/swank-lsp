@@ -70,12 +70,12 @@ run_check() {
   return 0
 }
 
-# Cursor on `list` in (defun foo (x y) (list x y)) — line 2, col 18
+# Cursor on `list` in (defun foo (x y) (list x y)) -- line 2, col 18
 run_check "hover"      2 18 "textDocument/hover"      "Documentation"
 run_check "definition" 2 18 "textDocument/definition" "uri ="
 
 # --- Local-resolution check (Phase 2) ---
-# Cursor on the use of `x` in (let ((x 1)) (list x)) — should resolve
+# Cursor on the use of `x` in (let ((x 1)) (list x)) -- should resolve
 # to the binder in the SAME file (the result's Location URI must equal
 # the temp file's URI), not fall through to swank (which would point at
 # sbcl-source).
@@ -131,7 +131,7 @@ if echo "$LOCAL_OUT" | grep -q "FAIL"; then
   exit 1
 fi
 
-# Cursor inside (forma — completion
+# Cursor inside (forma -- completion
 cat > "$TEST_FILE" <<'EOF'
 (in-package :cl-user)
 (forma

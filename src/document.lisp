@@ -12,12 +12,12 @@
   text
   version
   language-id
-  ;; Cached line-starts vector — invalidated on text change. Built
+  ;; Cached line-starts vector -- invalidated on text change. Built
   ;; lazily by ENSURE-LINE-STARTS.
   (line-starts nil))
 
 (defvar *document-store* (make-hash-table :test 'equal)
-  "URI string → DOCUMENT.")
+  "URI string -> DOCUMENT.")
 
 (defvar *document-store-lock* (bordeaux-threads:make-lock "swank-lsp document store"))
 
@@ -48,7 +48,7 @@
     (clrhash *document-store*)))
 
 (defun get-document (uri &key error-on-missing)
-  "Public accessor — looks up by URI. With ERROR-ON-MISSING, signals
+  "Public accessor -- looks up by URI. With ERROR-ON-MISSING, signals
 SIMPLE-ERROR if not found. Otherwise returns NIL."
   (or (lookup-document uri)
       (and error-on-missing
@@ -60,7 +60,7 @@ SIMPLE-ERROR if not found. Otherwise returns NIL."
       (setf (document-line-starts doc)
             (compute-line-starts (document-text doc)))))
 
-;;;; Heuristics over document text — used by handlers to extract a
+;;;; Heuristics over document text -- used by handlers to extract a
 ;;;; symbol or completion prefix at a given character offset.
 
 (defun symbol-char-p (c)
@@ -79,7 +79,7 @@ substring of TEXT containing the symbol at OFFSET, START is its
 inclusive start offset, END is its exclusive end offset. If the
 character at OFFSET is not part of a symbol, returns NIL.
 A symbol that ends exactly at OFFSET (cursor-after-name) is still
-considered to be \"at\" OFFSET — hover/definition want this."
+considered to be \"at\" OFFSET -- hover/definition want this."
   (let ((len (length text)))
     (when (zerop len)
       (return-from extract-symbol-at nil))
@@ -117,7 +117,7 @@ a string and the start offset of the prefix."
 ;;;;
 ;;;; When swank takes a "package name" argument, we want to give it
 ;;;; something sensible. Phase 2 may parse the buffer for an
-;;;; (in-package …) form; for Phase 1 we return :CL-USER unless one of
+;;;; (in-package ...) form; for Phase 1 we return :CL-USER unless one of
 ;;;; the document's first ~20 lines has a recognizable in-package form.
 
 (defun current-package-for-document (doc)
@@ -128,7 +128,7 @@ swank's PACKAGE arg."
         "CL-USER")))
 
 (defun parse-in-package (text)
-  "Scan TEXT for the first (in-package …) form near the top. Returns
+  "Scan TEXT for the first (in-package ...) form near the top. Returns
 the package name as a string, or NIL. Conservative: only recognizes
 (in-package :NAME) and (in-package #:NAME) and (in-package \"NAME\")."
   (let ((scan-start 0)

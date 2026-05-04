@@ -1,7 +1,7 @@
 (in-package #:swank-lsp/tests)
 
 ;;;; Unit tests for the position-encoding module.
-;;;; These are unit tests (not integration) — the conversion is pure
+;;;; These are unit tests (not integration) -- the conversion is pure
 ;;;; and complex enough to deserve focused tests on its own.
 
 (in-suite position-suite)
@@ -33,9 +33,9 @@
   (let ((s (format nil "ab~A~%cd~A~%ef" #\Return #\Return)))
     (with-encoding (:utf-8)
       (is (= 0 (swank-lsp:lsp-position->char-offset s 0 0)))
-      ;; Line 1 starts after the CRLF — 4 chars in.
+      ;; Line 1 starts after the CRLF -- 4 chars in.
       (is (= 4 (swank-lsp:lsp-position->char-offset s 1 0)))
-      ;; CRLF on line 1 → line 2 starts at 8.
+      ;; CRLF on line 1 -> line 2 starts at 8.
       (is (= 8 (swank-lsp:lsp-position->char-offset s 2 0))))))
 
 (test cr-only-line-endings
@@ -49,7 +49,7 @@
   ;; em-dash is 3 bytes in UTF-8.
   (let ((s (concatenate 'string "a" (string (code-char #x2014)) "b")))
     (with-encoding (:utf-8)
-      ;; UTF-8 col 0 → char 0, col 1 → char 1 (a), col 4 (after em-dash 3 bytes) → char 2
+      ;; UTF-8 col 0 -> char 0, col 1 -> char 1 (a), col 4 (after em-dash 3 bytes) -> char 2
       (is (= 0 (swank-lsp:lsp-position->char-offset s 0 0)))
       (is (= 1 (swank-lsp:lsp-position->char-offset s 0 1)))
       (is (= 2 (swank-lsp:lsp-position->char-offset s 0 4)))
@@ -67,16 +67,16 @@
         (is (= 0 l)) (is (= 2 c))))))
 
 (test supplementary-plane-utf16-surrogate-pair
-  ;; U+1F600 (grinning face) — supplementary plane → 2 utf-16 units, 4 utf-8 bytes.
+  ;; U+1F600 (grinning face) -- supplementary plane -> 2 utf-16 units, 4 utf-8 bytes.
   (let ((s (concatenate 'string "x" (string (code-char #x1F600)) "y")))
     (with-encoding (:utf-16)
       (is (= 1 (swank-lsp:lsp-position->char-offset s 0 1)))
-      ;; col 3 (1 for x + 2 surrogates) → past the emoji = char 2
+      ;; col 3 (1 for x + 2 surrogates) -> past the emoji = char 2
       (is (= 2 (swank-lsp:lsp-position->char-offset s 0 3)))
       (multiple-value-bind (l c) (swank-lsp:char-offset->lsp-position s 2)
         (is (= 0 l)) (is (= 3 c))))
     (with-encoding (:utf-8)
-      ;; col 5 (1 + 4) → char 2
+      ;; col 5 (1 + 4) -> char 2
       (is (= 2 (swank-lsp:lsp-position->char-offset s 0 5))))
     (with-encoding (:utf-32)
       (is (= 1 (swank-lsp:lsp-position->char-offset s 0 1)))

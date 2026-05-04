@@ -71,7 +71,7 @@ first."
             "Expected same-document URI, got ~S" (gethash "uri" loc))
         (let ((start (range-start loc))
               (end (range-end loc)))
-          ;; Binder is x at offset 7 → line 0, characters 7..8.
+          ;; Binder is x at offset 7 -> line 0, characters 7..8.
           (is (eql 0 (gethash "line" start)))
           (is (eql 7 (gethash "character" start)))
           (is (eql 0 (gethash "line" end)))
@@ -180,7 +180,7 @@ first."
   ;; existing swank path. The Location URI must NOT be the current
   ;; document.
   (let ((uri "file:///tmp/wire-fallthrough-global.lisp")
-        ;; "(list 1 2 3)" — call to cl:list, swank should find a file location.
+        ;; "(list 1 2 3)" -- call to cl:list, swank should find a file location.
         (text "(list 1 2 3)"))
     (with-defn-fixture (sock uri text)
       ;; cursor on the `l` of list at character 1
@@ -188,7 +188,7 @@ first."
              (loc (result-as-single-location result)))
         ;; Either a Location with a *different* URI than the current doc,
         ;; or a list of such Locations. If swank can't find it (image
-        ;; without sources), result may be null — but in our test image
+        ;; without sources), result may be null -- but in our test image
         ;; sbcl-source is installed, so we expect a Location.
         (is (hash-table-p loc) "Expected swank fallthrough to return a Location, got ~S" result)
         (is (not (equal uri (gethash "uri" loc)))
@@ -198,7 +198,7 @@ first."
 (test free-variable-falls-through-to-swank
   ;; Free variable (no binder in source). Resolver returns :FOREIGN,
   ;; handler falls through to swank. Swank may or may not find a global
-  ;; — what matters is the local branch didn't return a (wrong)
+  ;; -- what matters is the local branch didn't return a (wrong)
   ;; same-document Location.
   (let ((uri "file:///tmp/wire-fallthrough-free.lisp")
         (text "(+ y 1)"))
@@ -209,7 +209,7 @@ first."
           (is (not (equal uri (gethash "uri" loc)))
               "Free variable y must not resolve to current document; got URI ~S"
               (gethash "uri" loc)))
-        ;; Result null is also acceptable — swank had nothing.
+        ;; Result null is also acceptable -- swank had nothing.
         (is (or (null loc)
                 (and (hash-table-p loc)
                      (not (equal uri (gethash "uri" loc)))))
@@ -221,7 +221,7 @@ first."
   (let ((uri "file:///tmp/wire-cursor-end.lisp")
         (text "(let ((x 1)) (list x))"))
     (with-defn-fixture (sock uri text)
-      ;; The use of x is at offset 19. character=20 is one past — same
+      ;; The use of x is at offset 19. character=20 is one past -- same
       ;; symbol still under-cursor for editor purposes.
       (let* ((result (definition-at sock uri 0 20))
              (loc (result-as-single-location result)))
@@ -232,9 +232,9 @@ first."
 ;;; --- VIA-MACROS cases (resolver returns VIA-MACROS) ---
 ;;;
 ;;; The resolver returns VIA-MACROS when the cursor lands on a symbol
-;;; bound by a macro expansion. We test the full strategy: chain →
-;;; filter system symbols → ask swank where the innermost user macro
-;;; is defined → return its source location.
+;;; bound by a macro expansion. We test the full strategy: chain ->
+;;; filter system symbols -> ask swank where the innermost user macro
+;;; is defined -> return its source location.
 ;;;
 ;;; For swank to find a meaningful source location, the macros must be
 ;;; LOADED FROM A FILE (not just eval'd) so swank's source-tracking has
@@ -242,8 +242,8 @@ first."
 
 (test via-macros-jumps-to-innermost-user-defmacro
   ;; Inner macro introduces a binding via `let`; outer macro just
-  ;; passes through. Cursor on the macro-introduced symbol →
-  ;; resolver returns VIA-MACROS with chain (OUTER INNER) →
+  ;; passes through. Cursor on the macro-introduced symbol ->
+  ;; resolver returns VIA-MACROS with chain (OUTER INNER) ->
   ;; we jump to INNER's defmacro source.
   (let* ((macro-file (uiop:tmpize-pathname "/tmp/swank-lsp-test-vm-macros.lisp"))
          (macro-text "(in-package :cl-user)
@@ -285,8 +285,8 @@ first."
 
 (test via-macros-filters-system-macros-from-chain
   ;; The resolver's chain often includes CL standard macros (DOLIST,
-  ;; UNLESS, …) that the walker expanded along the way. Those are not
-  ;; useful jump targets — jumping to SBCL's source for `unless` is
+  ;; UNLESS, ...) that the walker expanded along the way. Those are not
+  ;; useful jump targets -- jumping to SBCL's source for `unless` is
   ;; never what the user wants. system-symbol-p filters them; the test
   ;; verifies a chain containing both kinds collapses to the user macro.
   (let* ((macro-file (uiop:tmpize-pathname "/tmp/swank-lsp-test-filter-macros.lisp"))
@@ -314,11 +314,11 @@ first."
                ;; The use of `item` is at character 43.
                (let* ((result (definition-at sock use-uri 1 43))
                       (loc (result-as-single-location result)))
-                 ;; The result type isn't the headline assertion — what
+                 ;; The result type isn't the headline assertion -- what
                  ;; matters is we did NOT get a result pointing into
                  ;; SBCL's source for DOLIST or UNLESS. Either we get
                  ;; the user's macro file (filter worked) or null
-                 ;; (resolver returned LOCAL — `item` is genuinely the
+                 ;; (resolver returned LOCAL -- `item` is genuinely the
                  ;; dolist binder from the user macro's perspective);
                  ;; both are correct. We just must not see system paths.
                  (when (hash-table-p loc)
