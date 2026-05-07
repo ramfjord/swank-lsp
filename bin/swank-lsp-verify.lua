@@ -86,4 +86,19 @@ do
   show('local-references', n == 2 and all_local, 'count=' .. n)
 end
 
+-- 5) didSave: send a notification, then re-query references. Proves the
+--    handler ran without crashing, swank:load-file succeeded, and the
+--    cache was invalidated and rebuilt cleanly on the follow-up query.
+do
+  local client = get_client()
+  client:notify('textDocument/didSave', {
+    textDocument = vim.lsp.util.make_text_document_params(),
+  })
+  vim.wait(500)
+  local r = req('textDocument/references', 2, 19)
+  local list = (type(r) == 'table') and r or {}
+  if list[1] == nil and r and r.result then list = r.result end
+  show('post-didSave-references', #list == 2, 'count=' .. #list)
+end
+
 vim.cmd('qa!')

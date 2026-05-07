@@ -54,6 +54,8 @@ corrupt the stdio LSP wire)."
                   (safe-handler "didChange" #'did-change-handler))
   (jsonrpc:expose jsonrpc "textDocument/didClose"
                   (safe-handler "didClose" #'did-close-handler))
+  (jsonrpc:expose jsonrpc "textDocument/didSave"
+                  (safe-handler "didSave" #'did-save-handler))
   (jsonrpc:expose jsonrpc "textDocument/definition"
                   (safe-handler "definition" #'definition-handler))
   (jsonrpc:expose jsonrpc "textDocument/references"

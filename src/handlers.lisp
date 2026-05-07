@@ -130,7 +130,12 @@ is a string naming the buffer's package (e.g. \"CL-USER\")."
       ;; LSP also accepts the integer form 1; using object form for
       ;; clarity since nvim's lspconfig handles both.
       (setf (gethash "openClose" sync-options) t
-            (gethash "change"    sync-options) 1)
+            (gethash "change"    sync-options) 1
+            ;; Request didSave notifications. We don't need the file
+            ;; text in the notification (the LSP version we have on
+            ;; disk matches the buffer at save time), so :includeText
+            ;; stays unset.
+            (gethash "save"      sync-options) t)
       (setf (gethash "textDocumentSync" caps) sync-options)
       (setf (gethash "definitionProvider" caps) t)
       (setf (gethash "referencesProvider" caps) t)
@@ -223,6 +228,50 @@ serverCapabilities. Test verifies our ack of full sync."
          (uri (gethash "uri" td)))
     (remove-document uri)
     nil))
+
+(defun did-save-handler (params)
+  "On save: load the file into the running image (so any defmacro /
+defun edits become visible to subsequent gd / gr / hover) and
+invalidate every cached document analysis (so via-macros chains
+recompute against the now-current image state).
+
+This is the auto-eval-on-save loop: the user's save replaces the
+manual `C-c C-c` they'd otherwise do in vlime. The LSP and the
+image are in the same SBCL, so swank functions are direct calls.
+
+Errors during load are logged and swallowed; the LSP wire stays
+clean (a load error elsewhere shouldn't take out the editor's
+language server)."
+  (let* ((td (gethash "textDocument" params))
+         (uri (gethash "uri" td))
+         (path (file-uri->path uri)))
+    (when path
+      (handler-case
+          (with-swank-buffer-package
+              ((current-package-or-default params))
+            (swank:load-file path))
+        (error (e)
+          (format *error-output*
+                  "~&swank-lsp didSave: load-file ~A: ~A~%" path e)
+          (force-output *error-output*))))
+    (invalidate-all-document-analyses)
+    nil))
+
+(defun invalidate-all-document-analyses ()
+  "Nil the ANALYSIS slot on every cached document. Called after a
+save's load-file runs, on the conservative assumption that the load
+may have redefined macros that other documents' analyses depend on.
+
+Coarse but correct: each document re-analyzes lazily on its next gd
+/ gr query. A precision upgrade — invalidating only documents whose
+ANALYSIS-EXPANDED-MACROS intersects the saved file's defmacros —
+lives behind a static defmacro scan with package-aware interning;
+deferred until the coarse cost shows up in profiles."
+  (bordeaux-threads:with-lock-held (*document-store-lock*)
+    (maphash (lambda (uri doc)
+               (declare (ignore uri))
+               (setf (document-analysis doc) nil))
+             *document-store*)))
 
 ;;;; -- textDocument/definition --
 ;;;;
