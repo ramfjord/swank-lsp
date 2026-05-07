@@ -17,3 +17,4 @@ ql slime
 ;; separately; not a regression from the cl-scope-resolver split.
 local jsonrpc /home/tramfjord/projects/swank-lsp/tmp/jsonrpc/
 ql flexi-streams
+ql cl-sqlite

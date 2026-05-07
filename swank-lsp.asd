@@ -11,6 +11,7 @@
                "bordeaux-threads"
                "usocket"
                "quri"
+               "sqlite"
                "cl-scope-resolver")
   :pathname "src/"
   :serial t
@@ -28,6 +29,7 @@
                (:file "document")
                (:file "derived-type")
                (:file "derived-type-sbcl" :if-feature :sbcl)
+               (:file "index-schema")
                (:file "handlers")
                (:file "server"))
   :in-order-to ((test-op (test-op "swank-lsp/tests"))))
@@ -45,6 +47,7 @@
                (:file "wire-tests")
                (:file "local-definition-tests")
                (:file "derived-type-tests" :if-feature :sbcl)
-               (:file "binder-context-tests"))
+               (:file "binder-context-tests")
+               (:file "index-schema-tests"))
   :perform (test-op (op c)
              (uiop:symbol-call :fiveam :run! (uiop:find-symbol* :all-tests :swank-lsp/tests))))
