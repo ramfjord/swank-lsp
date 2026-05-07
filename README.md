@@ -146,11 +146,50 @@ cd ~/projects/swank-lsp
 Then either symlink the asd into Quicklisp's `local-projects/`, or
 use the `(ql:quickload :swank-lsp)` workflow above.
 
-For the nvim plugin, copy `nvim-plugin/swank-lsp.lua` (TODO: not yet
-extracted into this repo — see the example in `~/.config/nvim/lua/plugins/`)
-into your LazyVim plugin directory. It registers swank-lsp via
-`nvim-lspconfig`'s custom-server API so LazyVim's default LSP keymaps
-(`gd`, `K`, `gK`, etc.) wire up automatically.
+### nvim plugin
+
+The plugin is part of this repo at `lua/swank-lsp/`. With lazy.nvim:
+
+```lua
+{
+  "<your-org>/swank-lsp",
+  dependencies = { "neovim/nvim-lspconfig" },
+  config = function() require("swank-lsp").setup({}) end,
+},
+```
+
+Or, while developing locally:
+
+```lua
+{
+  dir = "~/projects/swank-lsp",
+  name = "swank-lsp.nvim",
+  dependencies = { "neovim/nvim-lspconfig" },
+  config = function() require("swank-lsp").setup({}) end,
+},
+```
+
+`setup({})` uses sensible defaults — see `lua/swank-lsp/init.lua` for
+the option table. Notable knobs:
+
+| Option | Default | Purpose |
+|---|---|---|
+| `swank_lsp_root` | auto-detected | Where bin/ scripts and the fallback `.swank-lsp-port` live. |
+| `filetypes` | `{"lisp", "elp"}` | Drop `"elp"` if you don't have elp.nvim installed. |
+| `root_markers` | `{".git", "qlfile", "qlfile.lock"}` | First match walking up determines the LSP's root and where project-local `.swank-lsp-port` is looked for. |
+| `elp_gate` | `"auto"` | Gate position-bearing requests on `.elp` buffers to `<% %>` regions. Auto-enables when elp.nvim is loadable. |
+| `install_keymaps` | `true` | Belt-and-suspenders `gd`/`gK`/`gr` mappings on LspAttach. Set false if your distro's LSP keymaps already cover them. |
+
+Port-discovery priority (built into `setup`):
+
+1. `$SWANK_LSP_PORT` (env override)
+2. `<project-root>/.swank-lsp-port` — image started inside the project being edited
+3. `<swank_lsp_root>/.swank-lsp-port` — swank-lsp's own dev image
+4. Auto-spawn a fresh SBCL per attach (`qlot exec sbcl` if available, else bare `sbcl`)
+
+The first three modes attach to a running image, so your evaled
+`(defmacro …)` and `(defun …)` are visible immediately. Auto-spawn
+only sees the buffer text.
 
 ## Repo layout
 
