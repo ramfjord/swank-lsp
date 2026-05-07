@@ -464,147 +464,40 @@ macro chain to its defmacro."
 ;;;; because resolve gives a different binder range there.
 
 (defun references-handler (params)
-  "Return references for the cursor.
-
-LOCAL bindings → local-references only (lexicals don't cross files).
-
-Globals → project-source-references: walk every .lisp file under
-the project root and surface source-level occurrences.
-
-We deliberately do NOT use swank's xref tables for globals. SBCL's
-who-calls runs on *macroexpanded* code, so any caller of a macro
-that itself uses `char=` is reported as a `char=` caller — which
-would surface, e.g., every caller of WITH-SWANK-BUFFER-PACKAGE as a
-hit on `char=`. Source-scan asks the question the LSP convention
-expects: where does this symbol *appear* in source."
+  "Cross-file references via the union of:
+  - LOCAL    — same-file refs from the in-memory analysis (lexicals)
+  - PROJECT  — SQLite project index (cross-file occurrences)
+  - SWANK    — swank's xref tables, where the compiler recorded callers
+Deduped on (uri, range). When the cursor's classification is LOCAL,
+we stay intra-file (lexicals don't escape). Returns Location[] or null."
   (let ((ctx (build-defn-ctx params)))
     (cond
       ((null ctx) +json-null+)
-      ((cursor-is-local-p ctx)
-       (or (local-references ctx) +json-null+))
       (t
-       (or (dedup-locations (project-source-references ctx))
-           +json-null+)))))
+       (let ((merged (merged-references ctx)))
+         (or merged +json-null+))))))
 
-(defun cursor-is-local-p (ctx)
-  "T if the cursor in CTX is on an occurrence with LOCAL provenance.
-Uses the cached document analysis. Returns NIL on missing analysis,
-no occurrence, or non-local provenance."
-  (let* ((doc (defn-ctx-doc ctx))
-         (analysis (and doc (ensure-document-analysis doc)))
-         (occ (and analysis
-                   (occurrence-covering analysis (defn-ctx-sym-start ctx)))))
-    (and occ
-         (typep (cl-scope-resolver:occurrence-provenance occ)
-                'cl-scope-resolver:local))))
-
-(defparameter *reference-scan-skip-dirs*
-  '(".qlot" ".git" ".cache" "node_modules" "tmp" "_build")
-  "Directory basenames pruned during the project-source-references file
-walk. `.qlot/` holds vendored deps; `.git/` is VCS; the rest are
-common build/cache ejecta. Anything beneath them is considered
-foreign to the project and not surfaced as a reference.")
-
-(defun project-source-references (ctx)
-  "Find occurrences of the cursor's symbol name across project source
-files. LSP-textDocument/references semantics: where does this
-symbol appear in source?
-
-For each .lisp file under the project root (skipping
-*REFERENCE-SCAN-SKIP-DIRS*):
-  - run cl-scope-resolver:analyze
-  - keep occurrences whose SYMBOL-NAME matches the cursor's name
-  - drop occurrences with LOCAL provenance — those are unrelated
-    same-name lexicals (a let-bound `char` in some helper isn't a
-    reference to the global CHAR= the user is asking about)
-
-Returns a list of LSP Locations. NIL when no project root or no
-matching occurrences."
-  (let* ((root (and *server* (running-server-project-root *server*)))
-         (target-name (string-upcase (defn-ctx-sym ctx))))
-    (when root
-      (let ((results '()))
-        (dolist (file (collect-project-lisp-files root))
-          (dolist (loc (file-references file target-name))
-            (push loc results)))
-        (nreverse results)))))
-
-(defun collect-project-lisp-files (root)
-  "Recursively walk ROOT, returning .lisp file pathnames. Prunes any
-directory whose basename is in *REFERENCE-SCAN-SKIP-DIRS*."
-  (let ((files '()))
-    (labels ((walk (dir)
-               (dolist (sub (uiop:subdirectories dir))
-                 (let ((basename (car (last (pathname-directory sub)))))
-                   (unless (member basename *reference-scan-skip-dirs*
-                                   :test #'string=)
-                     (walk sub))))
-               (dolist (f (uiop:directory-files dir))
-                 (when (and (pathname-type f)
-                            (string-equal (pathname-type f) "lisp"))
-                   (push f files)))))
-      (walk root))
-    (nreverse files)))
-
-(defun file-references (path target-name)
-  "Return list of LSP Locations in PATH whose symbol-atom matches
-TARGET-NAME (string). Skips occurrences with LOCAL provenance.
-
-Prefers the in-memory document text over the on-disk version when
-the file is open in the editor — otherwise the user's unsaved edits
-wouldn't show up in `gr` results."
-  (let* ((uri (path-to-file-uri path))
-         (open-doc (lookup-document uri))
-         (text (or (and open-doc (document-text open-doc))
-                   (handler-case (alexandria:read-file-into-string path)
-                     (error () nil)))))
-    (when text
-      (let* ((analysis (handler-case (cl-scope-resolver:analyze text)
-                         (error () nil)))
-             (line-starts (compute-line-starts text)))
-        (when analysis
-          (loop for occ in (cl-scope-resolver:analysis-occurrences analysis)
-                for occ-name = (cl-scope-resolver:occurrence-name occ)
-                when (and (symbolp occ-name)
-                          (string= (symbol-name occ-name) target-name)
-                          (not (typep (cl-scope-resolver:occurrence-provenance occ)
-                                      'cl-scope-resolver:local)))
-                  collect (lsp-location-from-range
-                           uri
-                           (char-range->lsp-range
-                            text
-                            (cl-scope-resolver:occurrence-start occ)
-                            (cl-scope-resolver:occurrence-end occ)
-                            :encoding *server-position-encoding*
-                            :line-starts line-starts))))))))
-
-(defun path-to-file-uri (path)
-  "Convert a pathname to a file:// URI string."
-  (concatenate 'string
-               "file://"
-               (namestring (handler-case (truename path)
-                             (error () path)))))
-
-(defun location-key (loc)
-  "(uri start-line start-char end-line end-char) — Location identity
-for dedup. String + integer equality."
-  (let* ((range (gethash "range" loc))
-         (s (gethash "start" range))
-         (e (gethash "end" range)))
-    (list (gethash "uri" loc)
-          (gethash "line" s) (gethash "character" s)
-          (gethash "line" e) (gethash "character" e))))
-
-(defun dedup-locations (locations)
-  "Remove duplicates by LOCATION-KEY. Preserves first-occurrence order."
-  (let ((seen (make-hash-table :test 'equal))
-        (out '()))
-    (dolist (loc locations)
-      (let ((k (location-key loc)))
-        (unless (gethash k seen)
-          (setf (gethash k seen) t)
-          (push loc out))))
-    (nreverse out)))
+(defun merged-references (ctx)
+  "Strategy:
+  - If the cursor's classification is LOCAL: return LOCAL only.
+    Lexical bindings are intra-file by definition; including the
+    name-keyed cross-file matches would conflate distinct bindings
+    that share a name.
+  - Otherwise: union project + swank refs."
+  (let* ((analysis (ensure-document-analysis (defn-ctx-doc ctx)))
+         (cursor-occ (and analysis
+                          (occurrence-covering
+                           analysis (defn-ctx-sym-start ctx))))
+         (cursor-prov (and cursor-occ
+                           (cl-scope-resolver:occurrence-provenance cursor-occ))))
+    (cond
+      ((typep cursor-prov 'cl-scope-resolver:local)
+       (local-references ctx))
+      (t
+       (dedup-locations
+        (append
+         (project-references ctx)
+         (swank-references ctx)))))))
 
 (defun occurrence-covering (analysis offset)
   "Return the OCCURRENCE in ANALYSIS whose [start, end) covers OFFSET, or NIL."

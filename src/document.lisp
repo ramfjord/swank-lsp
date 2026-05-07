@@ -115,15 +115,10 @@ SIMPLE-ERROR if not found. Otherwise returns NIL."
       (setf (document-line-starts doc)
             (compute-line-starts (document-text doc)))))
 
-(defun ensure-document-analysis (doc)
-  "Build the cl-scope-resolver analysis of DOC's text on demand and
-cache it on the document. Returns the analysis, or NIL if ANALYZE
-signalled (caller treats NIL the same as 'nothing classifiable')."
-  (or (document-analysis doc)
-      (setf (document-analysis doc)
-            (handler-case
-                (cl-scope-resolver:analyze (document-text doc))
-              (error () nil)))))
+;; ensure-document-analysis lives in indexer.lisp -- it uses the same
+;; per-form in-package tracking the on-disk indexer does, so symbols
+;; interned during analysis match what the SQLite index sees. document.lisp
+;; just holds the cached slot.
 
 ;;;; Heuristics over document text -- used by handlers to extract a
 ;;;; symbol or completion prefix at a given character offset.

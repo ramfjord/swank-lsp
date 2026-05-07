@@ -368,6 +368,44 @@ the walks; deferred until needed."
       (when (index-file conn path)
         (incf count)))))
 
+;;;; ---- In-memory document analysis (the cache layer) ----
+;;;;
+;;;; Same per-form in-package tracking as the on-disk indexer, so
+;;;; symbols interned during the in-memory analysis match what's in
+;;;; the SQLite index. Without this, the LSP request thread's
+;;;; *package* (whatever swank-lsp happens to be bound to) ends up
+;;;; interning the document's symbols in the wrong package; a query
+;;;; that joins on (name, package) misses cross-file matches.
+
+(defun analyze-source-into-analysis (source)
+  "Run the per-form analyzer (with in-package tracking) on SOURCE,
+then collapse the per-form results into a single
+CL-SCOPE-RESOLVER:ANALYSIS struct so callers see the same shape
+they'd get from CL-SCOPE-RESOLVER:ANALYZE directly. Used by the
+in-memory cache; the on-disk indexer keeps the per-form structure
+because it writes per-form rows."
+  (let ((forms (analyze-file-source source))
+        (occurrences '())
+        (macros (make-hash-table :test 'eq)))
+    (dolist (form forms)
+      (dolist (o (analyzed-form-occurrences form))
+        (push o occurrences))
+      (dolist (m (analyzed-form-expanded-macros form))
+        (when m (setf (gethash m macros) t))))
+    (cl-scope-resolver:make-analysis
+     :occurrences (nreverse occurrences)
+     :expanded-macros (loop for k being each hash-key of macros collect k))))
+
+(defun ensure-document-analysis (doc)
+  "Build the cl-scope-resolver analysis of DOC's text on demand and
+cache it on the document. Returns the analysis, or NIL on signal
+(caller treats NIL the same as 'nothing classifiable')."
+  (or (document-analysis doc)
+      (setf (document-analysis doc)
+            (handler-case
+                (analyze-source-into-analysis (document-text doc))
+              (error () nil)))))
+
 ;;;; ---- Server-attached index lifecycle ----
 ;;;;
 ;;;; The LSP server holds a single SQLite handle for the project's
