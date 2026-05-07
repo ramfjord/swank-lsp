@@ -23,5 +23,8 @@
 (def-suite local-definition-suite :in all-tests
   :description "Local jump-to-def via cl-scope-resolver -- wire-level integration.")
 
+(def-suite derived-type-suite :in all-tests
+  :description "Type derivation via the compile-derive trick (SBCL-only).")
+
 (defun run-all ()
   (run! 'all-tests))

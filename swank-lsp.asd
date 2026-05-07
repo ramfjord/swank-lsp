@@ -26,6 +26,7 @@
                ;; things.
                (:file "position")
                (:file "document")
+               (:file "derived-type" :if-feature :sbcl)
                (:file "handlers")
                (:file "server"))
   :in-order-to ((test-op (test-op "swank-lsp/tests"))))
@@ -41,6 +42,7 @@
                (:file "position-tests")
                (:file "document-tests")
                (:file "wire-tests")
-               (:file "local-definition-tests"))
+               (:file "local-definition-tests")
+               (:file "derived-type-tests" :if-feature :sbcl))
   :perform (test-op (op c)
              (uiop:symbol-call :fiveam :run! (uiop:find-symbol* :all-tests :swank-lsp/tests))))
