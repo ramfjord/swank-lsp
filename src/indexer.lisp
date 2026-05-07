@@ -367,3 +367,87 @@ the walks; deferred until needed."
     (dolist (path paths count)
       (when (index-file conn path)
         (incf count)))))
+
+;;;; ---- Server-attached index lifecycle ----
+;;;;
+;;;; The LSP server holds a single SQLite handle for the project's
+;;;; index, plus a mutex guarding it (sqlite handles aren't
+;;;; thread-safe; the bulk-index thread and the LSP request thread
+;;;; both touch it). The lifecycle:
+;;;;
+;;;;   start-server-index server project-root
+;;;;     - opens index, stores on server
+;;;;     - kicks off background thread to bulk-index the project
+;;;;     - returns immediately (LSP requests aren't blocked on the
+;;;;       initial scan)
+;;;;
+;;;;   stop-server-index server
+;;;;     - disconnects the SQLite handle. The bulk-index thread, if
+;;;;       still running, will signal on its next sqlite call and
+;;;;       die. We don't join it.
+;;;;
+;;;;   with-server-index (conn-var) ...body...
+;;;;     - grabs the lock and binds CONN-VAR. Returns NIL (and
+;;;;       skips body) if no index is active. Used by handlers.
+
+(defun start-server-index (server project-root)
+  "Open the index for PROJECT-ROOT, store it on SERVER, and start
+the background bulk-index pass. SERVER is a RUNNING-SERVER. Idempotent
+on a server that already has an index."
+  (when (running-server-index-conn server)
+    (return-from start-server-index server))
+  (let ((conn (open-index project-root))
+        (lock (bordeaux-threads:make-lock "swank-lsp index")))
+    (setf (running-server-index-conn server) conn
+          (running-server-index-lock server) lock
+          (running-server-index-root server) project-root)
+    (setf (running-server-index-thread server)
+          (bordeaux-threads:make-thread
+           (lambda ()
+             (handler-case
+                 (bordeaux-threads:with-lock-held (lock)
+                   (when (running-server-index-conn server)
+                     (index-project conn project-root)))
+               (error (e)
+                 (format *error-output*
+                         "~&swank-lsp: bulk index failed: ~A~%" e)
+                 (force-output *error-output*))))
+           :name "swank-lsp index bulk"))
+    server))
+
+(defun stop-server-index (server)
+  "Close the index attached to SERVER. The background thread (if
+running) will signal on its next sqlite call. Idempotent."
+  (let ((conn (running-server-index-conn server)))
+    (when conn
+      ;; Take the lock so we don't disconnect mid-statement on the
+      ;; bulk thread. Once we have it, the bulk thread is between
+      ;; statements; safe to close.
+      (let ((lock (running-server-index-lock server)))
+        (if lock
+            (bordeaux-threads:with-lock-held (lock)
+              (close-index conn))
+            (close-index conn)))
+      (setf (running-server-index-conn server) nil
+            (running-server-index-lock server) nil
+            (running-server-index-root server) nil
+            (running-server-index-thread server) nil)))
+  server)
+
+(defmacro with-server-index ((conn-var &key (server '*server*)) &body body)
+  "Run BODY with CONN-VAR bound to the active index connection,
+under the index lock. If no server / no index, BODY does not run
+and the form returns NIL.
+
+Use for any handler that wants to read or write the index. The
+lock is held for the duration of BODY, so keep BODY tight (one
+SQL statement, or one INDEX-FILE call)."
+  (let ((s (gensym "SERVER"))
+        (l (gensym "LOCK")))
+    `(let ((,s ,server))
+       (when ,s
+         (let ((,conn-var (running-server-index-conn ,s))
+               (,l        (running-server-index-lock ,s)))
+           (when (and ,conn-var ,l)
+             (bordeaux-threads:with-lock-held (,l)
+               ,@body)))))))

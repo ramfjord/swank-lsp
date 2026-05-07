@@ -231,17 +231,23 @@ serverCapabilities. Test verifies our ack of full sync."
 
 (defun did-save-handler (params)
   "On save: load the file into the running image (so any defmacro /
-defun edits become visible to subsequent gd / gr / hover) and
-invalidate every cached document analysis (so via-macros chains
+defun edits become visible to subsequent gd / gr / hover),
+re-index the saved file in the SQLite project index, and invalidate
+every cached in-memory document analysis (so via-macros chains
 recompute against the now-current image state).
 
 This is the auto-eval-on-save loop: the user's save replaces the
 manual `C-c C-c` they'd otherwise do in vlime. The LSP and the
 image are in the same SBCL, so swank functions are direct calls.
 
-Errors during load are logged and swallowed; the LSP wire stays
-clean (a load error elsewhere shouldn't take out the editor's
-language server)."
+Index refresh is per-saved-file only — no fan-out to other files
+that might have used the saved file's macros. Documented v1
+limitation: those files keep stale via-macros chains until they're
+themselves saved (or the project is re-indexed). Precise
+expanded-macros-driven invalidation is the next step.
+
+Errors during load or index are logged and swallowed; the LSP wire
+stays clean."
   (let* ((td (gethash "textDocument" params))
          (uri (gethash "uri" td))
          (path (file-uri->path uri)))
@@ -253,6 +259,13 @@ language server)."
         (error (e)
           (format *error-output*
                   "~&swank-lsp didSave: load-file ~A: ~A~%" path e)
+          (force-output *error-output*)))
+      (handler-case
+          (with-server-index (conn)
+            (index-file conn path))
+        (error (e)
+          (format *error-output*
+                  "~&swank-lsp didSave: index-file ~A: ~A~%" path e)
           (force-output *error-output*))))
     (invalidate-all-document-analyses)
     nil))
@@ -695,31 +708,6 @@ or NIL if the location is not file-based."
                                                  :encoding *server-position-encoding*
                                                  :line-starts file-line-starts)
                     (list uri sl sc el ec)))))))))))
-
-(defun path->file-uri (path)
-  "Convert an absolute filesystem PATH to a file:// URI."
-  (let ((p (etypecase path
-             (string path)
-             (pathname (namestring path)))))
-    (if (search "://" p)
-        p  ; already a URI
-        (concatenate 'string "file://" p))))
-
-(defun file-uri->path (uri)
-  "Inverse of PATH->FILE-URI. Returns the path string, or NIL on
-mis-matched scheme."
-  (when (and uri (>= (length uri) 7) (string= "file://" uri :end2 7))
-    (subseq uri 7)))
-
-(defun read-file-as-string (path)
-  (with-open-file (in path :direction :input
-                           :external-format :utf-8
-                           :if-does-not-exist :error)
-    (let ((buf (make-string (file-length in))))
-      (let ((n (read-sequence buf in)))
-        (if (= n (length buf))
-            buf
-            (subseq buf 0 n))))))
 
 ;;;; -- textDocument/completion --
 ;;;;

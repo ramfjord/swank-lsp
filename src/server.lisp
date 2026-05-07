@@ -22,12 +22,21 @@
    (port           :initarg :port           :initform nil :accessor running-server-port)
    (thread         :initarg :thread         :initform nil :accessor running-server-thread)
    (exit-thunk     :initarg :exit-thunk     :initform nil :accessor running-server-exit-thunk)
-   ;; Project root captured at start-and-publish time. Used to filter
-   ;; swank xref results to in-project hits — swank's xref tables are
-   ;; image-global, so without this, `gr` on a common name (gethash,
-   ;; first, etc.) would surface callers from swank itself, alexandria,
-   ;; sbcl, and any other system loaded into the image.
-   (project-root   :initarg :project-root   :initform nil :accessor running-server-project-root)))
+   ;; Project root captured at start-and-publish time. Used by the
+   ;; project source-scan / index lookup, and by anything else that
+   ;; needs to bound its work to "this project."
+   (project-root   :initarg :project-root   :initform nil :accessor running-server-project-root)
+   ;; Project xref index — see src/index-schema.lisp + src/indexer.lisp.
+   ;; INDEX-CONN is the SQLite handle, NIL when no index is active.
+   ;; INDEX-LOCK guards every read/write — sqlite handles aren't
+   ;; thread-safe and the bulk-index thread + the request thread
+   ;; both touch it. INDEX-THREAD is the background bulk-index pass;
+   ;; we don't wait for it on stop, just let it die when the conn
+   ;; closes under it (it'll signal and the thread exits).
+   (index-conn     :initarg :index-conn     :initform nil :accessor running-server-index-conn)
+   (index-lock     :initarg :index-lock     :initform nil :accessor running-server-index-lock)
+   (index-thread   :initarg :index-thread   :initform nil :accessor running-server-index-thread)
+   (index-root     :initarg :index-root     :initform nil :accessor running-server-index-root)))
 
 (defvar *server* nil
   "Currently-running RUNNING-SERVER, or NIL.")
@@ -136,10 +145,12 @@ clean it up. Bound by START-AND-PUBLISH; nil otherwise.")
 
 (defun stop-server ()
   "Stop the running server, if any. Returns T if a server was stopped.
-If START-AND-PUBLISH wrote a port-file, delete it on stop."
+If START-AND-PUBLISH wrote a port-file, delete it on stop. Closes
+the project xref index attached to the server."
   (let ((rs *server*))
     (unless rs
       (return-from stop-server nil))
+    (handler-case (stop-server-index rs) (error () nil))
     (handler-case
         (let ((thread (running-server-thread rs)))
           (when (and thread (bordeaux-threads:thread-alive-p thread))
@@ -171,6 +182,17 @@ at a dead listener."
                               :if-exists :supersede
                               :if-does-not-exist :create)
       (format out "~A~%" bound))
+    ;; Open the project xref index and kick off a background bulk
+    ;; pass. Project root = *default-pathname-defaults* — same
+    ;; convention as port-file resolution above. If the directory
+    ;; isn't a git working tree, the bulk thread logs and exits;
+    ;; the LSP itself stays up (single-buffer features still work).
+    (handler-case
+        (start-server-index rs *default-pathname-defaults*)
+      (error (e)
+        (format *error-output*
+                "~&swank-lsp: index startup failed: ~A~%" e)
+        (force-output *error-output*)))
     (setf *published-port-file* path)
     rs))
 

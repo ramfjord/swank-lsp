@@ -29,9 +29,10 @@
                (:file "document")
                (:file "derived-type")
                (:file "derived-type-sbcl" :if-feature :sbcl)
+               (:file "path-util")
                (:file "index-schema")
-               (:file "handlers")
                (:file "indexer")
+               (:file "handlers")
                (:file "server"))
   :in-order-to ((test-op (test-op "swank-lsp/tests"))))
 
