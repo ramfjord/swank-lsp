@@ -184,7 +184,7 @@ might be running alongside swank in a long-lived dev image)."
   "PARAMS.textDocument: { uri, languageId, version, text }"
   (let* ((td   (gethash "textDocument" params))
          (uri  (gethash "uri" td))
-         (text (gethash "text" td))
+         (text (apply-byte-stream-translator uri (gethash "text" td)))
          (ver  (gethash "version" td))
          (lang (gethash "languageId" td)))
     (store-document
@@ -209,7 +209,8 @@ serverCapabilities. Test verifies our ack of full sync."
       ((and changes (listp changes))
        ;; Last change wins for full-sync; iterate and replace.
        (dolist (change changes)
-         (let ((new-text (gethash "text" change)))
+         (let ((new-text (apply-byte-stream-translator
+                          uri (gethash "text" change))))
            (when new-text
              (setf (document-text doc) new-text
                    (document-line-starts doc) nil))))

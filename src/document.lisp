@@ -19,6 +19,51 @@
 (defvar *document-store* (make-hash-table :test 'equal)
   "URI string -> DOCUMENT.")
 
+;;;; Byte-stream translators
+;;;;
+;;;; Embedded-language support hook. A translator is (URI TEXT) →
+;;;; TRANSLATED-TEXT, registered against a filename extension. When
+;;;; a document arrives via didOpen / didChange and its URI's
+;;;; extension matches a registered translator, the function is
+;;;; called on the incoming text before STORE-DOCUMENT sees it.
+;;;;
+;;;; The downstream pipeline — cl-scope-resolver, EXTRACT-SYMBOL-AT,
+;;;; PARSE-IN-PACKAGE, and the handlers — is unchanged: it always
+;;;; operates on the document's stored TEXT. So a translator can
+;;;; rewrite arbitrary surface syntax into Lisp without any handler
+;;;; needing to know.
+;;;;
+;;;; The intended translator is byte-equivalent: same length, same
+;;;; line breaks, same byte at every code position. That keeps LSP
+;;;; positions round-trip-clean — clients don't need to translate
+;;;; positions on responses. ELP's elp:extract-code-text follows
+;;;; this convention.
+;;;;
+;;;; Registration is pull-based: producers (e.g. ELP) call
+;;;; (setf (gethash "ext" swank-lsp:*byte-stream-translators*) #'fn)
+;;;; from their own load code. swank-lsp doesn't know about ELP and
+;;;; doesn't depend on any specific embedded language.
+
+(defvar *byte-stream-translators* (make-hash-table :test 'equal)
+  "Filename-extension (lowercase, no dot) → translator function.
+Each translator is called as (TRANSLATOR URI TEXT) and must return a
+new TEXT string. See APPLY-BYTE-STREAM-TRANSLATOR.")
+
+(defun apply-byte-stream-translator (uri text)
+  "If URI's extension is registered in *BYTE-STREAM-TRANSLATORS*, call
+that translator on (URI, TEXT) and return its result. Otherwise return
+TEXT unchanged. NIL URI / NIL TEXT short-circuit to TEXT."
+  (cond
+    ((or (null uri) (null text)) text)
+    (t
+     (let* ((dot (position #\. uri :from-end t))
+            (extension (and dot (string-downcase (subseq uri (1+ dot)))))
+            (translator (and extension
+                             (gethash extension *byte-stream-translators*))))
+       (if translator
+           (funcall translator uri text)
+           text)))))
+
 (defvar *document-store-lock* (bordeaux-threads:make-lock "swank-lsp document store"))
 
 (defun store-document (doc)
