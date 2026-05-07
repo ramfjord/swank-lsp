@@ -21,7 +21,13 @@
    (transport-kind :initarg :transport-kind :accessor running-server-transport-kind)
    (port           :initarg :port           :initform nil :accessor running-server-port)
    (thread         :initarg :thread         :initform nil :accessor running-server-thread)
-   (exit-thunk     :initarg :exit-thunk     :initform nil :accessor running-server-exit-thunk)))
+   (exit-thunk     :initarg :exit-thunk     :initform nil :accessor running-server-exit-thunk)
+   ;; Project root captured at start-and-publish time. Used to filter
+   ;; swank xref results to in-project hits — swank's xref tables are
+   ;; image-global, so without this, `gr` on a common name (gethash,
+   ;; first, etc.) would surface callers from swank itself, alexandria,
+   ;; sbcl, and any other system loaded into the image.
+   (project-root   :initarg :project-root   :initform nil :accessor running-server-project-root)))
 
 (defvar *server* nil
   "Currently-running RUNNING-SERVER, or NIL.")
@@ -82,7 +88,9 @@ Returns the RUNNING-SERVER instance."
            (running-server-transport-kind *server*)))
   (reset-server-state)
   (reset-document-store)
-  (let ((jsonrpc (jsonrpc:make-server)))
+  (let ((jsonrpc (jsonrpc:make-server))
+        (root (handler-case (truename *default-pathname-defaults*)
+                (error () nil))))
     (register-lsp-methods jsonrpc)
     (ecase transport
       (:tcp
@@ -90,7 +98,8 @@ Returns the RUNNING-SERVER instance."
               (rs (make-instance 'running-server
                                  :jsonrpc jsonrpc
                                  :transport-kind :tcp
-                                 :port bound-port)))
+                                 :port bound-port
+                                 :project-root root)))
          (setf *server* rs)
          (let ((thread
                  (bordeaux-threads:make-thread
@@ -110,7 +119,8 @@ Returns the RUNNING-SERVER instance."
        (let ((rs (make-instance 'running-server
                                 :jsonrpc jsonrpc
                                 :transport-kind :stdio
-                                :port nil)))
+                                :port nil
+                                :project-root root)))
          (setf *server* rs)
          ;; stdio start-server blocks the calling thread on the read loop.
          (let ((bt:*default-special-bindings* nil))

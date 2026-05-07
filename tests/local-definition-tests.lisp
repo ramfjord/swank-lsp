@@ -379,10 +379,24 @@ first."
           (is (not (member 0 lines))
               "Outer-scope binder (line 0) should not appear; got lines ~A" lines))))))
 
-(test references-on-non-local-returns-null
-  (let ((uri "file:///tmp/wire-refs-none.lisp")
+(test references-on-non-local-returns-project-xrefs
+  "Cursor on a global like `list` triggers the cross-file fan-out:
+swank's xref tables filtered to the running server's project root.
+The test image has loaded swank-lsp, whose source calls `list` from
+many places, so we expect ≥1 location, all under the project root.
+Filter correctness (no swank/alexandria/sbcl callers leaking through)
+is what makes this useful — asserted by checking every URI sits
+under the running server's root."
+  (let ((uri "file:///tmp/wire-refs-list.lisp")
         (text "(list 1 2 3)"))
     (with-defn-fixture (sock uri text)
       (let ((result (references-at sock uri 0 1)))   ; cursor on `list'
-        (is (or (eq result :null) (null result))
-            "Non-local cursor should return null, got ~A" result)))))
+        (is (and (listp result) (not (null result)))
+            "Expected non-empty cross-file refs, got ~A" result)
+        (let ((root (truename (swank-lsp::running-server-project-root
+                               swank-lsp::*server*))))
+          (dolist (loc result)
+            (let* ((u (gethash "uri" loc))
+                   (path (subseq u 7))) ; strip "file://"
+              (is (uiop:subpathp (truename path) root)
+                  "Expected ~A to be under project root ~A" path root))))))))

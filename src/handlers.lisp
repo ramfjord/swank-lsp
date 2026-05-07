@@ -488,12 +488,17 @@ no occurrence, or non-local provenance."
   "Cross-file references via swank's xref tables. Queries :calls,
 :references, and :macroexpands and unions the results.
 
-Returns NIL when swank has no xref data for the symbol — typically
-because the project hasn't been loaded into this image. swank xref
-is the source of truth for cross-file refs in this branch; if it's
-empty, gr returns local hits only."
+Filtered to the running server's project root. swank's xref tables
+are image-global — without this filter, `gr gethash` would return
+every caller in swank, alexandria, sbcl, and every other loaded
+system. We want refs inside *this* project.
+
+Returns NIL when swank has no xref data for the symbol (typically
+because the project hasn't been loaded into this image) or when
+every xref is outside the project root."
   (let* ((sym-name (defn-ctx-sym ctx))
          (pkg-name (defn-ctx-pkg ctx))
+         (root (and *server* (running-server-project-root *server*)))
          (xrefs (handler-case
                     (with-swank-buffer-package (pkg-name)
                       (swank:xrefs '(:calls :references :macroexpands)
@@ -501,13 +506,37 @@ empty, gr returns local hits only."
                   (error () nil)))
          (results '()))
     (dolist (kind-block xrefs)
-      ;; kind-block shape: (:calls (("dspec" . location) ...))
+      ;; kind-block shape: (kind . entries), where each entry is a
+      ;; two-element list (name-string location-plist) — see swank's
+      ;; xref>elisp. NOT (name . loc); a cons would silently give us
+      ;; (loc) and definition-entry->location-info returns NIL on the
+      ;; wrapped form.
       (dolist (entry (rest kind-block))
-        (let* ((loc (cdr entry))
-               (info (definition-entry->location-info loc pkg-name)))
-          (when info
-            (push (apply #'make-lsp-location info) results)))))
+        (let* ((loc (second entry)))
+          (when (path-in-project-p (location-plist-file loc) root)
+            (let ((info (definition-entry->location-info loc pkg-name)))
+              (when info
+                (push (apply #'make-lsp-location info) results)))))))
     (nreverse results)))
+
+(defun location-plist-file (loc)
+  "Return the file path string from a swank :location plist, or NIL.
+Shape: (:location (:file PATH) (:position N) (:snippet S))."
+  (when (and (consp loc) (eq (first loc) :location))
+    (let ((file-form (assoc :file (rest loc))))
+      (and file-form (second file-form)))))
+
+(defun path-in-project-p (path root)
+  "T if PATH is underneath ROOT. ROOT NIL means \"no filter\" (don't
+silently swallow refs when we forgot to capture a root); PATH NIL
+means \"swank gave us a non-file location\" — drop it, since we
+can't render or filter it anyway."
+  (cond
+    ((null path) nil)
+    ((null root) t)
+    (t
+     (let ((p (handler-case (truename path) (error () nil))))
+       (and p (uiop:subpathp p root))))))
 
 (defun location-key (loc)
   "(uri start-line start-char end-line end-char) — Location identity
