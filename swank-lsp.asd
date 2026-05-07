@@ -26,7 +26,8 @@
                ;; things.
                (:file "position")
                (:file "document")
-               (:file "derived-type" :if-feature :sbcl)
+               (:file "derived-type")
+               (:file "derived-type-sbcl" :if-feature :sbcl)
                (:file "handlers")
                (:file "server"))
   :in-order-to ((test-op (test-op "swank-lsp/tests"))))
