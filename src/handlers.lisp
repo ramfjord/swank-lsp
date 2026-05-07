@@ -451,9 +451,84 @@ macro chain to its defmacro."
 ;;;; because resolve gives a different binder range there.
 
 (defun references-handler (params)
+  "Return references for the cursor.
+
+LOCAL bindings → local-references only (lexicals don't cross files;
+including swank xref hits would conflate same-name distinct binders).
+
+Anything else → union of local + swank xref hits, deduped. Cross-
+file coverage relies on swank's xref tables, which only hold entries
+for symbols compiled into the image. The recommended deployment is
+to host swank-lsp inside your dev image (the same one you load your
+project into for vlime / REPL work). See README."
   (let ((ctx (build-defn-ctx params)))
-    (or (and ctx (local-references ctx))
-        +json-null+)))
+    (cond
+      ((null ctx) +json-null+)
+      ((cursor-is-local-p ctx)
+       (or (local-references ctx) +json-null+))
+      (t
+       (or (dedup-locations
+            (append (or (local-references ctx) '())
+                    (or (swank-references ctx) '())))
+           +json-null+)))))
+
+(defun cursor-is-local-p (ctx)
+  "T if the cursor in CTX is on an occurrence with LOCAL provenance.
+Uses the cached document analysis. Returns NIL on missing analysis,
+no occurrence, or non-local provenance."
+  (let* ((doc (defn-ctx-doc ctx))
+         (analysis (and doc (ensure-document-analysis doc)))
+         (occ (and analysis
+                   (occurrence-covering analysis (defn-ctx-sym-start ctx)))))
+    (and occ
+         (typep (cl-scope-resolver:occurrence-provenance occ)
+                'cl-scope-resolver:local))))
+
+(defun swank-references (ctx)
+  "Cross-file references via swank's xref tables. Queries :calls,
+:references, and :macroexpands and unions the results.
+
+Returns NIL when swank has no xref data for the symbol — typically
+because the project hasn't been loaded into this image. swank xref
+is the source of truth for cross-file refs in this branch; if it's
+empty, gr returns local hits only."
+  (let* ((sym-name (defn-ctx-sym ctx))
+         (pkg-name (defn-ctx-pkg ctx))
+         (xrefs (handler-case
+                    (with-swank-buffer-package (pkg-name)
+                      (swank:xrefs '(:calls :references :macroexpands)
+                                   sym-name))
+                  (error () nil)))
+         (results '()))
+    (dolist (kind-block xrefs)
+      ;; kind-block shape: (:calls (("dspec" . location) ...))
+      (dolist (entry (rest kind-block))
+        (let* ((loc (cdr entry))
+               (info (definition-entry->location-info loc pkg-name)))
+          (when info
+            (push (apply #'make-lsp-location info) results)))))
+    (nreverse results)))
+
+(defun location-key (loc)
+  "(uri start-line start-char end-line end-char) — Location identity
+for dedup. String + integer equality."
+  (let* ((range (gethash "range" loc))
+         (s (gethash "start" range))
+         (e (gethash "end" range)))
+    (list (gethash "uri" loc)
+          (gethash "line" s) (gethash "character" s)
+          (gethash "line" e) (gethash "character" e))))
+
+(defun dedup-locations (locations)
+  "Remove duplicates by LOCATION-KEY. Preserves first-occurrence order."
+  (let ((seen (make-hash-table :test 'equal))
+        (out '()))
+    (dolist (loc locations)
+      (let ((k (location-key loc)))
+        (unless (gethash k seen)
+          (setf (gethash k seen) t)
+          (push loc out))))
+    (nreverse out)))
 
 (defun occurrence-covering (analysis offset)
   "Return the OCCURRENCE in ANALYSIS whose [start, end) covers OFFSET, or NIL."

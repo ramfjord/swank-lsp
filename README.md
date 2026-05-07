@@ -95,6 +95,34 @@ When you eval a `defmacro` in vlime, the LSP sees it on the next
 request — `gd` on a macro-introduced binding (`via-macros` path) just
 works.
 
+#### Cross-file `gr` needs your project loaded
+
+`gr` (textDocument/references) returns two kinds of hits:
+
+- **Local references** — read out of an in-memory walk of the buffer's
+  text. No image state involved; works on unsaved edits.
+- **Cross-file references** — pulled from swank's xref tables
+  (`who-calls`, `who-references`, `who-macroexpands`).
+
+swank's xref tables only contain entries for code that has been
+**compiled into this image**. So cross-file `gr` works for symbols
+your dev image has loaded, and returns nothing for symbols it hasn't.
+Save-on-edit will keep things current after the first load (didSave
+calls `swank:load-file`), but you need an initial load.
+
+Recommended setups, easiest first:
+
+1. **Edit the project that's already loaded in your dev image.** If
+   you start swank-lsp inside the SBCL you also use for vlime/REPL
+   work — and that image has `(ql:quickload :my-project)` or
+   `(asdf:load-system :my-project)` in it — `gr` on globals just works.
+2. **Use a startup snippet that loads your project explicitly.** See
+   `bin/swank-lsp-with-project.lisp.example` for a template; copy it,
+   adapt the system name, and either eval it or pass it via
+   `sbcl --load`.
+3. **Auto-spawn (Mode 2) won't give you cross-file `gr`** — the
+   spawned image only knows what's in the open buffer.
+
 ### Discovery convention (for any tool, not just nvim)
 
 Anything that wants to talk to a swank-lsp running in someone's
@@ -128,12 +156,13 @@ Works out of the box; useful for trying things or for one-off edits.
 | Key (LazyVim default) | LSP method | Notes |
 |---|---|---|
 | `gd` | `textDocument/definition` | local binders (let/lambda/dolist/loop/flet/labels/MVB/destructuring-bind/let*); macro-introduced bindings (jumps to the innermost user macro's defmacro); globals (falls through to swank). |
+| `gr` | `textDocument/references` | local binders (in-buffer walk); cross-file refs to globals via swank's xref tables. Cross-file requires the project to be loaded into the image — see "Cross-file `gr` needs your project loaded" above. |
 | `K` | `textDocument/hover` | swank's `documentation-symbol`. Works on globals and on symbols whose `defun`/`defmacro` is in your image. |
 | `gK` / `<C-k>` | `textDocument/signatureHelp` | swank's `operator-arglist`. |
 | (auto, as you type) | `textDocument/completion` | swank's `simple-completions`. Trigger chars: `: * + - /`. |
 
-Not implemented: `gr` (references), diagnostics, code actions,
-formatting, semantic tokens. Each is a small, focused addition.
+Not implemented: diagnostics, code actions, formatting, semantic
+tokens. Each is a small, focused addition.
 
 ## Installation
 

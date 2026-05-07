@@ -1,0 +1,51 @@
+;;;; Recommended swank-lsp startup, with your project loaded so
+;;;; cross-file `gr` actually finds things.
+;;;;
+;;;; swank's xref tables (who-calls / who-references / who-macroexpands)
+;;;; only hold entries for code compiled into the image. swank-lsp asks
+;;;; those tables for cross-file references, so if your project isn't
+;;;; loaded here, `gr` on a global symbol returns local hits only.
+;;;;
+;;;; Usage (copy this file, adapt the system name, drop the .example):
+;;;;
+;;;;   cp bin/swank-lsp-with-project.lisp.example bin/swank-lsp-with-project.lisp
+;;;;   # edit MY-PROJECT below
+;;;;   qlot exec sbcl --load bin/swank-lsp-with-project.lisp
+;;;;
+;;;; Or eval the body in an existing dev image. Either way, the
+;;;; .swank-lsp-port file lands in *default-pathname-defaults*, which
+;;;; should be your project root so the nvim plugin finds it.
+
+(ql:quickload :swank-lsp)
+
+;;;; --- Load your project here. ----------------------------------------
+;;;;
+;;;; Replace MY-PROJECT with your actual ASDF system. If your project
+;;;; isn't reachable from the current Quicklisp/qlot setup, point
+;;;; ASDF at it first via (push #P"/path/to/proj/" asdf:*central-registry*)
+;;;; or a local qlfile pin.
+
+(asdf:load-system :my-project)
+
+;;;; --- Optional: also expose swank itself so vlime can attach. --------
+;;;;
+;;;; Skip if you don't use vlime, or if you prefer a separate vlime
+;;;; image. swank-lsp does NOT need this — it calls swank functions
+;;;; directly in-process.
+
+;; (swank:create-server :port 4005 :dont-close t)
+
+;;;; --- Start the LSP listener and publish the port. -------------------
+;;;;
+;;;; PORT 0 picks a free port; the actual bound port is written to
+;;;; .swank-lsp-port in the directory below. The nvim plugin's discovery
+;;;; reads that file. Pin to a fixed port if you prefer.
+
+(let ((*default-pathname-defaults* (truename ".")))
+  (swank-lsp:start-and-publish :port 0))
+
+;;;; Keep the image alive when invoked via --load --non-interactive.
+;;;; If you eval this in a REPL, the loop is harmless but unnecessary
+;;;; — comment it out.
+
+(loop (sleep 60))
