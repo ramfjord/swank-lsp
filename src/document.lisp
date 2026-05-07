@@ -14,7 +14,14 @@
   language-id
   ;; Cached line-starts vector -- invalidated on text change. Built
   ;; lazily by ENSURE-LINE-STARTS.
-  (line-starts nil))
+  (line-starts nil)
+  ;; Cached cl-scope-resolver:analysis of TEXT. Invalidated on text
+  ;; change (set to NIL in did-change-handler). Built lazily by
+  ;; ENSURE-DOCUMENT-ANALYSIS so the first definition / references
+  ;; query against a buffer pays for the walk and subsequent ones
+  ;; reuse it. Co-located with TEXT so the cache is correct by
+  ;; construction: any code path that mutates TEXT must nil this.
+  (analysis nil))
 
 (defvar *document-store* (make-hash-table :test 'equal)
   "URI string -> DOCUMENT.")
@@ -104,6 +111,16 @@ SIMPLE-ERROR if not found. Otherwise returns NIL."
   (or (document-line-starts doc)
       (setf (document-line-starts doc)
             (compute-line-starts (document-text doc)))))
+
+(defun ensure-document-analysis (doc)
+  "Build the cl-scope-resolver analysis of DOC's text on demand and
+cache it on the document. Returns the analysis, or NIL if ANALYZE
+signalled (caller treats NIL the same as 'nothing classifiable')."
+  (or (document-analysis doc)
+      (setf (document-analysis doc)
+            (handler-case
+                (cl-scope-resolver:analyze (document-text doc))
+              (error () nil)))))
 
 ;;;; Heuristics over document text -- used by handlers to extract a
 ;;;; symbol or completion prefix at a given character offset.

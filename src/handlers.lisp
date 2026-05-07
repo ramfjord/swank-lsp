@@ -213,7 +213,8 @@ serverCapabilities. Test verifies our ack of full sync."
                           uri (gethash "text" change))))
            (when new-text
              (setf (document-text doc) new-text
-                   (document-line-starts doc) nil))))
+                   (document-line-starts doc) nil
+                   (document-analysis doc) nil))))
        (when ver (setf (document-version doc) ver))))
     nil))
 
@@ -306,9 +307,10 @@ First non-NIL wins.")
         +json-null+)))
 
 (defun definition-via-resolver (ctx)
-  "Strategy: ask cl-scope-resolver. Returns a Location or NIL.
+  "Strategy: read the cursor's provenance from the document's cached
+analysis. Returns a Location or NIL.
 
-The resolver returns a discriminated-union PROVENANCE:
+Provenance is one of:
   LOCAL       -- binder visible in this document; build a same-doc Location.
   VIA-MACROS  -- binder introduced by macroexpansion; the chain names
                 the macros responsible. We jump to the *innermost user
@@ -316,11 +318,14 @@ The resolver returns a discriminated-union PROVENANCE:
                 macros) by asking swank where its defmacro lives.
   NONE        -- no actionable answer; fall through.
 
-Resolver errors are swallowed: the swank strategy is the backstop."
-  (let ((prov (handler-case
-                  (cl-scope-resolver:resolve (defn-ctx-text ctx)
-                                             (defn-ctx-sym-start ctx))
-                (error () nil))))
+The analysis is built once per document (lazy + cached on the
+DOCUMENT struct, invalidated on didChange). Re-using it across gd /
+gr / hover means a buffer pays for one cl-scope-resolver walk per
+edit, not one per query."
+  (let* ((analysis (ensure-document-analysis (defn-ctx-doc ctx)))
+         (occ (and analysis
+                   (occurrence-covering analysis (defn-ctx-sym-start ctx))))
+         (prov (and occ (cl-scope-resolver:occurrence-provenance occ))))
     (etypecase prov
       (null nil)
       (cl-scope-resolver:local      (location-from-local-binder prov ctx))
@@ -420,8 +425,7 @@ the same (start, end) source range — that's the binder identity."
          (sym-start (defn-ctx-sym-start ctx))
          (uri (defn-ctx-uri ctx))
          (line-starts (defn-ctx-line-starts ctx))
-         (analysis (handler-case (cl-scope-resolver:analyze text)
-                     (error () nil))))
+         (analysis (ensure-document-analysis (defn-ctx-doc ctx))))
     (unless analysis
       (return-from local-references nil))
     (let* ((cursor-occ (occurrence-covering analysis sym-start))
