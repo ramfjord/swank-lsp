@@ -14,5 +14,7 @@ tmp/
 .swank-port
 .swank-session
 .swank-lsp-port
+.swank-lsp.pid
+.swank-lsp-server.log
 .vlime-port
 .mcp.json
