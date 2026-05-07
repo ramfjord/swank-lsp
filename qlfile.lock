@@ -3,9 +3,8 @@
   :initargs (:distribution "https://beta.quicklisp.org/dist/quicklisp.txt" :%version :latest)
   :version "2026-01-01"))
 ("cl-scope-resolver" .
- (:class qlot/source/github:source-github
-  :initargs (:repos "ramfjord/cl-scope-resolver" :ref nil :branch nil :tag nil)
-  :version "github-cd32c8d5f4d24f54354b4355d55098082d577b20"))
+ (:class qlot/source/local:source-local
+  :initargs (:path "/home/tramfjord/projects/cl-scope-resolver/")))
 ("eclector" .
  (:class qlot/source/ql:source-ql
   :initargs (:%version :latest)

@@ -1,4 +1,4 @@
-github cl-scope-resolver ramfjord/cl-scope-resolver
+local cl-scope-resolver /home/tramfjord/projects/cl-scope-resolver/
 ql eclector
 ql hu.dwim.walker
 ql fiveam
