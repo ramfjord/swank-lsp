@@ -31,6 +31,7 @@
                (:file "derived-type-sbcl" :if-feature :sbcl)
                (:file "index-schema")
                (:file "handlers")
+               (:file "indexer")
                (:file "server"))
   :in-order-to ((test-op (test-op "swank-lsp/tests"))))
 
@@ -48,6 +49,7 @@
                (:file "local-definition-tests")
                (:file "derived-type-tests" :if-feature :sbcl)
                (:file "binder-context-tests")
-               (:file "index-schema-tests"))
+               (:file "index-schema-tests")
+               (:file "indexer-tests"))
   :perform (test-op (op c)
              (uiop:symbol-call :fiveam :run! (uiop:find-symbol* :all-tests :swank-lsp/tests))))

@@ -220,6 +220,16 @@ The first three modes attach to a running image, so your evaled
 `(defmacro …)` and `(defun …)` are visible immediately. Auto-spawn
 only sees the buffer text.
 
+## Project requirements
+
+Project-wide features (cross-file references, eventual rename, the
+SQLite xref index — see `plans/project-wide-references.md`) require
+the project to be a **git working tree**. The indexer enumerates
+source files via `git ls-files`, which gets `.gitignore` correctness
+and vendored-deps exclusion for free. Non-git directories are not
+supported for these features (single-buffer `gd`/`gr`/hover work
+fine without git).
+
 ## Repo layout
 
 - `src/` — the LSP server (handlers, document store, position
