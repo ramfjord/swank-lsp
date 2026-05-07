@@ -70,4 +70,20 @@ do
        got_uri and ('uri=' .. got_uri) or '(no uri in response)')
 end
 
+-- 4) local references: cursor on the body x. Expect two locations
+--    (the binder + the use), both in this file.
+do
+  local r = req('textDocument/references', 2, 19)
+  local list = (type(r) == 'table') and r or {}
+  -- Spec: references returns Location[] | null. Some clients wrap;
+  -- defensive: accept either flat or {result=...}.
+  if list[1] == nil and r and r.result then list = r.result end
+  local n = #list
+  local all_local = n > 0
+  for _, loc in ipairs(list) do
+    if loc.uri ~= local_uri then all_local = false end
+  end
+  show('local-references', n == 2 and all_local, 'count=' .. n)
+end
+
 vim.cmd('qa!')

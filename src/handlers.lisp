@@ -401,63 +401,52 @@ macro chain to its defmacro."
     (or (and ctx (local-references ctx))
         +json-null+)))
 
+(defun occurrence-covering (analysis offset)
+  "Return the OCCURRENCE in ANALYSIS whose [start, end) covers OFFSET, or NIL."
+  (find-if (lambda (o)
+             (and (<= (cl-scope-resolver:occurrence-start o) offset)
+                  (< offset (cl-scope-resolver:occurrence-end o))))
+           (cl-scope-resolver:analysis-occurrences analysis)))
+
 (defun local-references (ctx)
   "Find all references to the binder at the cursor. Returns an array
-of LSP Locations, or NIL if cursor is not on a local binding."
-  (let* ((text  (defn-ctx-text ctx))
+of LSP Locations, or NIL if cursor is not on a local binding.
+
+Uses cl-scope-resolver:analyze to walk the document once and visit
+every symbol-atom with a precomputed provenance. Two occurrences are
+references to the same binder iff their LOCAL provenances point at
+the same (start, end) source range — that's the binder identity."
+  (let* ((text (defn-ctx-text ctx))
          (sym-start (defn-ctx-sym-start ctx))
-         (uri   (defn-ctx-uri ctx))
+         (uri (defn-ctx-uri ctx))
          (line-starts (defn-ctx-line-starts ctx))
-         (prov  (handler-case (cl-scope-resolver:resolve text sym-start)
-                  (error () nil))))
-    (unless (and prov (typep prov 'cl-scope-resolver:local))
+         (analysis (handler-case (cl-scope-resolver:analyze text)
+                     (error () nil))))
+    (unless analysis
       (return-from local-references nil))
-    (let* ((b-start (cl-scope-resolver:local-start prov))
-           (b-end   (cl-scope-resolver:local-end   prov))
-           (name    (subseq text b-start b-end))
-           (refs '()))
-      (dolist (pos (token-positions text name))
-        (let ((p (handler-case (cl-scope-resolver:resolve text pos)
-                   (error () nil))))
-          (when (and p
-                     (typep p 'cl-scope-resolver:local)
-                     (= (cl-scope-resolver:local-start p) b-start)
-                     (= (cl-scope-resolver:local-end   p) b-end))
-            (push (lsp-location-from-range
-                   uri
-                   (char-range->lsp-range
-                    text pos (+ pos (length name))
-                    :encoding *server-position-encoding*
-                    :line-starts line-starts))
-                  refs))))
-      (nreverse refs))))
-
-(defun token-positions (text name)
-  "Positions in TEXT where NAME appears as a complete token (not as a
-substring of a longer identifier). Linear scan."
-  (let ((positions '())
-        (len (length name))
-        (i 0))
-    (loop
-      (let ((found (search name text :start2 i)))
-        (unless found (return (nreverse positions)))
-        (let ((before (and (plusp found) (char text (1- found))))
-              (after  (and (< (+ found len) (length text))
-                           (char text (+ found len)))))
-          (unless (or (lisp-symbol-char-p before)
-                      (lisp-symbol-char-p after))
-            (push found positions)))
-        (setf i (1+ found))))))
-
-(defun lisp-symbol-char-p (c)
-  "T if C is a character that can appear inside a CL symbol name (so
-finding NAME adjacent to it would be matching part of a longer
-identifier, not the symbol itself)."
-  (and c (not (or (member c '(#\Space #\Newline #\Tab #\Return
-                              #\( #\) #\' #\` #\, #\; #\" #\#))
-                  ;; brackets/braces aren't standard CL but treat as
-                  ;; separators since they appear in some sources
-                  (member c '(#\[ #\] #\{ #\}))))))
+    (let* ((cursor-occ (occurrence-covering analysis sym-start))
+           (cursor-prov (and cursor-occ
+                             (cl-scope-resolver:occurrence-provenance cursor-occ))))
+      (unless (typep cursor-prov 'cl-scope-resolver:local)
+        (return-from local-references nil))
+      (let ((b-start (cl-scope-resolver:local-start cursor-prov))
+            (b-end   (cl-scope-resolver:local-end   cursor-prov))
+            (refs '()))
+        (dolist (occ (cl-scope-resolver:analysis-occurrences analysis))
+          (let ((p (cl-scope-resolver:occurrence-provenance occ)))
+            (when (and (typep p 'cl-scope-resolver:local)
+                       (= (cl-scope-resolver:local-start p) b-start)
+                       (= (cl-scope-resolver:local-end   p) b-end))
+              (push (lsp-location-from-range
+                     uri
+                     (char-range->lsp-range
+                      text
+                      (cl-scope-resolver:occurrence-start occ)
+                      (cl-scope-resolver:occurrence-end occ)
+                      :encoding *server-position-encoding*
+                      :line-starts line-starts))
+                    refs))))
+        (nreverse refs)))))
 
 (defun system-symbol-p (sym)
   "T if SYM lives in an implementation/standard package whose contents
