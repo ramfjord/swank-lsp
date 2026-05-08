@@ -380,16 +380,34 @@ first."
               "Outer-scope binder (line 0) should not appear; got lines ~A" lines))))))
 
 (test references-on-non-local-returns-project-xrefs
-  "Cursor on a global like `list` triggers the project-source scan:
-walk every .lisp file under the running server's project root,
-return source occurrences. swank-lsp's own source uses `list`
-heavily, so we expect ≥1 location, all under the project root.
+  "Cursor on a global like `list` lands cross-file refs out of the
+SQLite project index. swank-lsp's own source uses `list` heavily,
+so we expect ≥1 location, all under the project root.
 
-Filter correctness — no .qlot/ deps, no SBCL/swank xref noise —
-is what makes this useful, asserted via the under-root check."
+Filter correctness — no .qlot/ deps, no SBCL xref noise — is
+asserted via the under-root check.
+
+Synchronization: the bulk-index thread runs async; we wait for it
+to finish so the test isn't racy."
   (let ((uri "file:///tmp/wire-refs-list.lisp")
         (text "(list 1 2 3)"))
     (with-defn-fixture (sock uri text)
+      ;; The shared test server was started via START-SERVER, which
+      ;; does not attach a project index (only START-AND-PUBLISH does).
+      ;; Attach one here pointing at the swank-lsp source root, then
+      ;; wait for the bulk-index thread before querying.
+      (let ((root (truename "/home/tramfjord/projects/swank-lsp/")))
+        (unless (swank-lsp::running-server-index-conn swank-lsp::*server*)
+          (swank-lsp::start-server-index swank-lsp::*server* root))
+        (let ((idx-thread (swank-lsp::running-server-index-thread
+                           swank-lsp::*server*)))
+          (when idx-thread
+            (handler-case (bordeaux-threads:join-thread idx-thread)
+              (error () nil))))
+        ;; Set project-root too so the local-references path / future
+        ;; under-root checks see the same value.
+        (setf (swank-lsp::running-server-project-root swank-lsp::*server*)
+              root))
       (let ((result (references-at sock uri 0 1)))   ; cursor on `list'
         (is (and (listp result) (not (null result)))
             "Expected non-empty cross-file refs, got ~A" result)

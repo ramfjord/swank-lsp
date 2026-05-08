@@ -470,7 +470,21 @@ we stay intra-file (lexicals don't escape). Returns Location[] or null."
     Lexical bindings are intra-file by definition; including the
     name-keyed cross-file matches would conflate distinct bindings
     that share a name.
-  - Otherwise: union project + swank refs."
+  - Otherwise: project-references only.
+
+We deliberately do NOT include swank-references in the union for
+project files. swank's xref tables expose call-site positions, but
+those positions don't point at the function-name atom — they point
+somewhere inside the surrounding form (often the snippet's start,
+which sits before / after the actual symbol). For LSP gr that's
+broken: the user expects a highlight on the symbol, not on
+arbitrary bytes nearby. Project-references reads occurrences out of
+the SQLite index where each row is a real symbol-atom range, so
+positions are correct.
+
+swank-references is still defined in index-query.lisp; we keep it
+for diagnostic / future use (eg \"calls from compiled code with no
+literal source\" when the index hasn't run yet)."
   (let* ((analysis (ensure-document-analysis (defn-ctx-doc ctx)))
          (cursor-occ (and analysis
                           (occurrence-covering
@@ -481,10 +495,7 @@ we stay intra-file (lexicals don't escape). Returns Location[] or null."
       ((typep cursor-prov 'cl-scope-resolver:local)
        (local-references ctx))
       (t
-       (dedup-locations
-        (append
-         (project-references ctx)
-         (swank-references ctx)))))))
+       (dedup-locations (project-references ctx))))))
 
 (defun occurrence-covering (analysis offset)
   "Return the OCCURRENCE in ANALYSIS whose [start, end) covers OFFSET, or NIL."
