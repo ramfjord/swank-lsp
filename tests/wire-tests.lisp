@@ -226,6 +226,44 @@ the predicate's last value (truthy on success, falsy on timeout)."
             (is (search "(1-" value)
                 "hover should include the init-form (1- ...); got ~S" value)))))))
 
+(test hover-on-use-of-lexical-binder-redirects-to-binder
+  ;; K on a USE of `hi` (not the binder) should produce the same
+  ;; hover as K on the binder. Regression guard for the resolve-and-
+  ;; redirect workaround in BINDER-INFO-OFFSET-REDIRECTED.
+  (with-test-server (port)
+    (with-client-socket (sock port)
+      (let ((text "(defun frob (line-starts)
+  (let ((lo 0)
+        (hi (1- (length line-starts))))
+    (list lo hi)))"))
+        (initialize-and-open sock
+                             :uri "file:///tmp/wire-hover-use.lisp"
+                             :text text)
+        (let* ((use-prefix "(list lo ")
+               (use-anchor (search use-prefix text))
+               (use-offset (and use-anchor (+ use-anchor (length use-prefix))))
+               (use-line   (count #\Newline text :end use-offset))
+               (use-char   (- use-offset
+                              (or (position #\Newline text :end use-offset
+                                            :from-end t) -1)
+                              1))
+               (params (make-hash-table :test 'equal))
+               (td (make-hash-table :test 'equal))
+               (pos (make-hash-table :test 'equal)))
+          (setf (gethash "uri" td) "file:///tmp/wire-hover-use.lisp")
+          (setf (gethash "line" pos) use-line
+                (gethash "character" pos) use-char)
+          (setf (gethash "textDocument" params) td
+                (gethash "position" params) pos)
+          (let* ((resp (send-and-receive sock "textDocument/hover" :params params))
+                 (result (gethash "result" resp))
+                 (contents (and (hash-table-p result) (gethash "contents" result)))
+                 (value (and contents (gethash "value" contents))))
+            (is (and (stringp value) (search "INTEGER" (string-upcase value)))
+                "use-site hover should mirror binder hover; got ~S" value)
+            (is (search "(1-" value)
+                "use-site hover should include the binder's init-form; got ~S" value)))))))
+
 (test hover-on-declared-fixnum-param-shows-fixnum
   (with-test-server (port)
     (with-client-socket (sock port)

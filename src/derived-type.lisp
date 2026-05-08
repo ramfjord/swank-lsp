@@ -66,17 +66,27 @@ after their introspection step."
           return-spec))))
 
 (defun single-primary-or-values (values-form)
+  "Strip the (VALUES …) envelope to its first primary type when a
+single-name binding can only see the primary value. Cases handled:
+  (values X &optional)              -> X
+  (values X &rest T)                -> X
+  (values X Y … &optional)          -> X    (multi-value: bind only sees primary)
+  (values X Y … &rest T)            -> X
+Otherwise pass the whole values form through. The 'binding to a
+single name only sees the primary' rule mirrors how let/let*
+binding pairs evaluate their init-form -- consistent with hover's
+caller, which is asking for the type of one bound name."
   (let ((tail (rest values-form)))
     (cond
-      ((and (consp tail)
-            (consp (rest tail))
-            (eq (second tail) '&optional)
-            (null (cddr tail)))
-       (first tail))
-      ((and (consp tail)
-            (consp (rest tail))
-            (eq (second tail) '&rest)
-            (or (null (cddr tail))
-                (and (eq (third tail) t) (null (cdddr tail)))))
+      ((null tail) values-form)                         ; (values) -- weird; preserve
+      ((member (first tail) '(&optional &rest))         ; (values &optional ...) -- preserve
+       values-form)
+      ;; Single primary, then &optional or &rest T closes it out.
+      ((let ((after (member-if (lambda (x) (member x '(&optional &rest))) tail)))
+         (or (null after)                               ; (values X) -- preserve as (values X)
+             (and (eq (first after) '&optional))
+             (and (eq (first after) '&rest)
+                  (or (null (rest after))
+                      (eq (second after) t)))))
        (first tail))
       (t values-form))))

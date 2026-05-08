@@ -799,9 +799,11 @@ Returns an LSP Hover hash with markdown content, or NIL when the
 cursor isn't on a lexical we can describe -- caller falls through to
 the docstring path."
   (declare (ignore sym))
-  (let* ((text (document-text doc))
-         (bi (handler-case (cl-scope-resolver:binder-info-at text offset)
-               (error () nil))))
+  (let* ((text   (document-text doc))
+         (lookup (binder-info-offset-redirected text offset))
+         (bi (and lookup
+                  (handler-case (cl-scope-resolver:binder-info-at text lookup)
+                    (error () nil)))))
     (when bi
       (let* ((name      (cl-scope-resolver:binder-info-name bi))
              (init      (cl-scope-resolver:binder-info-init-form bi))
@@ -811,6 +813,27 @@ the docstring path."
              (type-spec (derive-type-for-binder name init free declares))
              (value     (build-lexical-hover-value name type-spec init)))
         (lsp-hover-markup value)))))
+
+(defun binder-info-offset-redirected (text offset)
+  "Workaround for the upstream gap in cl-scope-resolver:binder-info-at:
+when the cursor is on a USE of a local binder, RESOLVE points at the
+binder via LOCAL's start/end but BINDER-INFO-AT itself only
+classifies binder-position cursors. Redirect uses to the binder
+location before calling. Returns the offset to call BINDER-INFO-AT
+with, or NIL if there's nothing local at the cursor.
+
+TODO(upstream): cl-scope-resolver:binder-info-at should follow LOCAL
+provenance back to the binder internally; once that lands, this
+shim collapses to (text offset)."
+  (let ((prov (handler-case (cl-scope-resolver:resolve text offset)
+                (error () nil))))
+    (cond
+      ((null prov) nil)
+      ((and (cl-scope-resolver:local-p prov)
+            (not (cl-scope-resolver:local-cursor-on-binder-p prov)))
+       (cl-scope-resolver:local-start prov))
+      ((cl-scope-resolver:local-p prov) offset)
+      (t nil))))
 
 (defun derive-type-for-binder (name init free declares)
   "For let/let*/mvb: derive the init-form's type. For params (no
