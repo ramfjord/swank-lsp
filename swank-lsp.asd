@@ -11,8 +11,7 @@
                "bordeaux-threads"
                "usocket"
                "quri"
-               "cl-scope-resolver"
-               "concrete-syntax-tree")
+               "cl-scope-resolver")
   :pathname "src/"
   :serial t
   :components ((:file "package")
@@ -29,7 +28,6 @@
                (:file "document")
                (:file "derived-type")
                (:file "derived-type-sbcl" :if-feature :sbcl)
-               (:file "binder-context")
                (:file "handlers")
                (:file "server"))
   :in-order-to ((test-op (test-op "swank-lsp/tests"))))
