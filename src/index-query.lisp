@@ -170,10 +170,18 @@ calls, eval'd code, etc.). Union catches both."
                       (push (apply #'make-lsp-location info) results))))))))
         (nreverse results)))))
 
+(defparameter *xref-skip-dirs*
+  '(".qlot" ".git" ".cache" "node_modules" "tmp" "_build")
+  "Directory basenames that, even when nested under the project root,
+are treated as foreign for xref purposes. .qlot/ holds vendored
+deps + setup scripts swank's xref still tracks; .git/ is VCS;
+the rest are common build/cache ejecta.")
+
 (defun xref-loc-in-project-p (loc root)
-  "True when swank's :location plist points at a file under ROOT.
-NIL ROOT → t (no filter). Non-file locations (eg :error, :buffer)
-return nil — we can't render them as LSP Locations anyway."
+  "True when swank's :location plist points at a file under ROOT and
+not under any of *XREF-SKIP-DIRS*. NIL ROOT → t (no filter).
+Non-file locations (eg :error, :buffer) return nil — we can't
+render them as LSP Locations anyway."
   (cond
     ((null root) t)
     ((not (and (consp loc) (eq (first loc) :location))) nil)
@@ -182,7 +190,17 @@ return nil — we can't render them as LSP Locations anyway."
             (path (and file-form (second file-form))))
        (and path
             (let ((p (handler-case (truename path) (error () nil))))
-              (and p (uiop:subpathp p root))))))))
+              (and p
+                   (uiop:subpathp p root)
+                   (not (path-passes-through-skip-dir-p p root)))))))))
+
+(defun path-passes-through-skip-dir-p (path root)
+  "True when PATH's directory components beyond ROOT include any
+basename in *XREF-SKIP-DIRS*."
+  (let ((rel (enough-namestring path root)))
+    (some (lambda (dir)
+            (search (concatenate 'string dir "/") rel))
+          *xref-skip-dirs*)))
 
 ;;;; ---- Dedup ----
 
