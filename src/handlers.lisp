@@ -89,22 +89,9 @@ line/character -- defensive against clients that pass weird params."
         (force-output *error-output*)
         +json-null+))))
 
-(defmacro with-swank-buffer-package ((pkg-name) &body body)
-  "Establish the dynamic bindings swank's emacs-rex protocol normally
-provides, so handlers can call swank entry points directly. PKG-NAME
-is a string naming the buffer's package (e.g. \"CL-USER\")."
-  `(let* ((__pkg-name ,pkg-name)
-          (swank::*buffer-package* (or (and __pkg-name
-                                            (find-package
-                                             (string-upcase
-                                              (if (and (> (length __pkg-name) 0)
-                                                       (char= (char __pkg-name 0) #\:))
-                                                  (subseq __pkg-name 1)
-                                                  __pkg-name))))
-                                       *package*))
-          (swank::*buffer-readtable* *readtable*))
-     (declare (ignorable swank::*buffer-package* swank::*buffer-readtable*))
-     ,@body))
+;; with-swank-buffer-package + definition-entry->location-info live
+;; in path-util.lisp now -- index-query.lisp loads before handlers.lisp
+;; and needs them at compile time.
 
 ;;;; -- Lifecycle: initialize / initialized / shutdown / exit --
 
@@ -565,42 +552,8 @@ COMMON-LISP-USER pass through."
           (make-lsp-range start-line start-char end-line end-char))
     h))
 
-(defun definition-entry->location-info (loc pkg)
-  "Convert a swank :location plist to (URI START-LINE START-CHAR END-LINE END-CHAR)
-or NIL if the location is not file-based."
-  (declare (ignore pkg))
-  (when (and (consp loc) (eq (first loc) :location))
-    (let* ((file-form (assoc :file (rest loc)))
-           (pos-form  (assoc :position (rest loc)))
-           (snippet-form (assoc :snippet (rest loc))))
-      (when (and file-form pos-form)
-        (let* ((path (second file-form))
-               (one-based (second pos-form))
-               (snippet (and snippet-form (second snippet-form)))
-               (uri (path->file-uri path)))
-          ;; swank's :position is 1-based for emacs convention; convert
-          ;; to 0-based char offset in the *file*. Then convert to LSP
-          ;; line/character. We have to read the file to learn its line
-          ;; structure for the encoding mapping. For a v0, snippet length
-          ;; gives us a usable end range without re-reading.
-          (let ((file-text (handler-case
-                               (read-file-as-string path)
-                             (error () nil))))
-            (when file-text
-              (let* ((char-offset (max 0 (1- one-based)))
-                     (file-line-starts (compute-line-starts file-text))
-                     (snippet-len (and snippet
-                                       (length (string-trim '(#\Newline) snippet)))))
-                (multiple-value-bind (sl sc)
-                    (char-offset->lsp-position file-text char-offset
-                                               :encoding *server-position-encoding*
-                                               :line-starts file-line-starts)
-                  (multiple-value-bind (el ec)
-                      (char-offset->lsp-position file-text
-                                                 (+ char-offset (or snippet-len 0))
-                                                 :encoding *server-position-encoding*
-                                                 :line-starts file-line-starts)
-                    (list uri sl sc el ec)))))))))))
+;; definition-entry->location-info moved to path-util.lisp (index-query
+;; needs it at compile time).
 
 ;;;; -- textDocument/completion --
 ;;;;

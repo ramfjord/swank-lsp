@@ -142,6 +142,7 @@ calls, eval'd code, etc.). Union catches both."
                            'cl-scope-resolver:local)))
       (let* ((sym-name (defn-ctx-sym ctx))
              (pkg-name (defn-ctx-pkg ctx))
+             (root (and *server* (running-server-project-root *server*)))
              (xrefs (handler-case
                         (with-swank-buffer-package (pkg-name)
                           (swank:xrefs '(:calls :references :macroexpands)
@@ -149,14 +150,39 @@ calls, eval'd code, etc.). Union catches both."
                       (error () nil)))
              (results '()))
         (dolist (kind-block xrefs)
-          ;; kind-block = (:calls (("dspec" . location) ...))
+          ;; kind-block = (:calls (("dspec" location-plist) ...)).
+          ;; Each entry is a TWO-ELEMENT LIST, not a cons pair --
+          ;; (cdr entry) would yield (loc) and the location-info
+          ;; converter returns NIL on the wrapped form.
+          ;;
+          ;; swank's xref tables are image-global; without the project-
+          ;; root filter, gr on a common name (gethash, list, char=)
+          ;; would pull callers from every loaded system: babel, sbcl-
+          ;; source, alexandria, and so on. We want refs inside *this*
+          ;; project. ROOT NIL means "no filter" (don't silently swallow
+          ;; refs when we forgot to capture a root).
           (let ((entries (rest kind-block)))
             (dolist (entry entries)
-              (let* ((loc (cdr entry))
-                     (info (definition-entry->location-info loc pkg-name)))
-                (when info
-                  (push (apply #'make-lsp-location info) results))))))
+              (let* ((loc (second entry)))
+                (when (xref-loc-in-project-p loc root)
+                  (let ((info (definition-entry->location-info loc pkg-name)))
+                    (when info
+                      (push (apply #'make-lsp-location info) results))))))))
         (nreverse results)))))
+
+(defun xref-loc-in-project-p (loc root)
+  "True when swank's :location plist points at a file under ROOT.
+NIL ROOT → t (no filter). Non-file locations (eg :error, :buffer)
+return nil — we can't render them as LSP Locations anyway."
+  (cond
+    ((null root) t)
+    ((not (and (consp loc) (eq (first loc) :location))) nil)
+    (t
+     (let* ((file-form (assoc :file (rest loc)))
+            (path (and file-form (second file-form))))
+       (and path
+            (let ((p (handler-case (truename path) (error () nil))))
+              (and p (uiop:subpathp p root))))))))
 
 ;;;; ---- Dedup ----
 
