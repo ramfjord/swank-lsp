@@ -186,6 +186,78 @@ the predicate's last value (truthy on success, falsy on timeout)."
             (is (stringp (gethash "value" contents)))
             (is (plusp (length (gethash "value" contents))))))))))
 
+(test hover-on-lexical-let-binder-shows-type-and-init
+  ;; The headline case: K on `hi` shows "hi : <integer-shaped type>"
+  ;; and a code block with "hi = (1- (length line-starts))".
+  (with-test-server (port)
+    (with-client-socket (sock port)
+      (let ((text "(defun frob (line-starts)
+  (let ((lo 0)
+        (hi (1- (length line-starts))))
+    (list lo hi)))"))
+        (initialize-and-open sock
+                             :uri "file:///tmp/wire-hover-let.lisp"
+                             :text text)
+        (let* ((hi-offset (search "hi" text :start2 30))
+               (hi-line   (count #\Newline text :end hi-offset))
+               (hi-char   (- hi-offset
+                             (or (position #\Newline text :end hi-offset
+                                           :from-end t) -1)
+                             1))
+               (params (make-hash-table :test 'equal))
+               (td (make-hash-table :test 'equal))
+               (pos (make-hash-table :test 'equal)))
+          (setf (gethash "uri" td) "file:///tmp/wire-hover-let.lisp")
+          (setf (gethash "line" pos) hi-line
+                (gethash "character" pos) hi-char)
+          (setf (gethash "textDocument" params) td
+                (gethash "position" params) pos)
+          (let* ((resp (send-and-receive sock "textDocument/hover" :params params))
+                 (result (gethash "result" resp))
+                 (contents (and (hash-table-p result)
+                                (gethash "contents" result)))
+                 (kind  (and contents (gethash "kind" contents)))
+                 (value (and contents (gethash "value" contents))))
+            (is (equal "markdown" kind) "kind should be markdown; got ~S" kind)
+            (is (and (stringp value) (search "HI" (string-upcase value)))
+                "hover should mention HI; got ~S" value)
+            (is (search "INTEGER" (string-upcase value))
+                "hover should include integer-shaped type; got ~S" value)
+            (is (search "(1-" value)
+                "hover should include the init-form (1- ...); got ~S" value)))))))
+
+(test hover-on-declared-fixnum-param-shows-fixnum
+  (with-test-server (port)
+    (with-client-socket (sock port)
+      (let ((text "(defun double (x)
+  (declare (fixnum x))
+  (* 2 x))"))
+        (initialize-and-open sock
+                             :uri "file:///tmp/wire-hover-param.lisp"
+                             :text text)
+        (let* ((x-offset (search "x" text))
+               (x-line   (count #\Newline text :end x-offset))
+               (x-char   (- x-offset
+                            (or (position #\Newline text :end x-offset
+                                          :from-end t) -1)
+                            1))
+               (params (make-hash-table :test 'equal))
+               (td (make-hash-table :test 'equal))
+               (pos (make-hash-table :test 'equal)))
+          (setf (gethash "uri" td) "file:///tmp/wire-hover-param.lisp")
+          (setf (gethash "line" pos) x-line
+                (gethash "character" pos) x-char)
+          (setf (gethash "textDocument" params) td
+                (gethash "position" params) pos)
+          (let* ((resp (send-and-receive sock "textDocument/hover" :params params))
+                 (result (gethash "result" resp))
+                 (contents (and (hash-table-p result)
+                                (gethash "contents" result)))
+                 (value (and contents (gethash "value" contents))))
+            (is (and (stringp value) (search "FIXNUM" (string-upcase value)))
+                "hover for declared-fixnum param should include FIXNUM; got ~S"
+                value)))))))
+
 (test signature-help-returns-arglist
   (with-test-server (port)
     (with-client-socket (sock port)

@@ -19,7 +19,9 @@
    #:lsp-position->char-offset
    #:char-offset->lsp-position
    #:compute-line-starts
-   #:*server-position-encoding*))
+   #:*server-position-encoding*
+   ;; Hover knobs (see src/handlers.lisp)
+   #:*hover-content-format*))
 
 ;; Internal symbols are reachable as swank-lsp::NAME -- the tests use
 ;; that form. We deliberately do NOT expose a separate "internal"

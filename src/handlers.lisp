@@ -755,6 +755,25 @@ Return a list of LSP CompletionItem hashes (without sorting)."
     h))
 
 ;;;; -- textDocument/hover --
+;;;;
+;;;; Two paths, tried in order:
+;;;;   1. LEXICAL: cursor is on a lexical binder or one of its uses.
+;;;;      Resolve the binding via cl-scope-resolver, derive the type
+;;;;      via the SBCL backend, render `**name** : type` plus a
+;;;;      `name = init-form` code block when an init exists.
+;;;;   2. DOCSTRING: cursor is on a global. Ask swank for the
+;;;;      documentation string. Existing behaviour.
+;;;;
+;;;; The lexical path returns NIL (rather than +json-null+) when it
+;;;; has nothing useful to say -- e.g. an undeclared lambda param
+;;;; whose only inferable type is T -- so the docstring path gets a
+;;;; chance.
+
+(defvar *hover-content-format* "markdown"
+  "LSP MarkupKind for the lexical-hover content. \"markdown\" or
+\"plaintext\". Defaulting to markdown so K renders the code-fenced
+init-form nicely; flip to \"plaintext\" if your client doesn't
+render markdown.")
 
 (defun hover-handler (params)
   (let ((doc (document-from-params params :error-on-missing nil)))
@@ -770,24 +789,95 @@ Return a list of LSP CompletionItem hashes (without sorting)."
           (declare (ignore line-starts))
           (unless (and sym (plusp (length sym)))
             (return-from hover-handler +json-null+))
-          (let ((doc-string (handler-case
-                                (with-swank-buffer-package
-                                    ((current-package-for-document doc))
-                                  (swank:documentation-symbol sym))
-                              (error () nil))))
-            (cond
-              ((or (null doc-string) (string= doc-string ""))
-               +json-null+)
-              ((string-equal doc-string
-                             (format nil "Can't find documentation for ~A" sym))
-               +json-null+)
-              (t
-               (let ((h (make-hash-table :test 'equal))
-                     (contents (make-hash-table :test 'equal)))
-                 (setf (gethash "kind" contents) "plaintext"
-                       (gethash "value" contents) doc-string)
-                 (setf (gethash "contents" h) contents)
-                 h)))))))))
+          (or (lexical-hover doc offset sym)
+              (docstring-hover doc sym)
+              +json-null+))))))
+
+(defun lexical-hover (doc offset sym)
+  "Hover content for a cursor on a lexical binder (or a use of one).
+Returns an LSP Hover hash with markdown content, or NIL when the
+cursor isn't on a lexical we can describe -- caller falls through to
+the docstring path."
+  (declare (ignore sym))
+  (let* ((text (document-text doc))
+         (bi (handler-case (cl-scope-resolver:binder-info-at text offset)
+               (error () nil))))
+    (when bi
+      (let* ((name      (cl-scope-resolver:binder-info-name bi))
+             (init      (cl-scope-resolver:binder-info-init-form bi))
+             (free      (cl-scope-resolver:enclosing-lexicals bi))
+             (declares  (cl-scope-resolver:local-declares-for
+                         bi (cons name free)))
+             (type-spec (derive-type-for-binder name init free declares))
+             (value     (build-lexical-hover-value name type-spec init)))
+        (lsp-hover-markup value)))))
+
+(defun derive-type-for-binder (name init free declares)
+  "For let/let*/mvb: derive the init-form's type. For params (no
+init): derive the type of the binder NAME itself, with DECLARES
+forwarded -- so a (declare (fixnum x)) on a defun param yields
+FIXNUM. Returns NIL if no backend is registered."
+  (cond
+    (init (compile-derived-type-of init free declares))
+    (t    (compile-derived-type-of name (cons name free) declares))))
+
+(defun lexical-hover-uninformative-p (type)
+  "T and * are SBCL's spellings of \"no information.\" Treating both
+as suppress-the-type-line until commit 4's simplifier subsumes the
+rule."
+  (or (null type) (eq type t) (eq type '*)))
+
+(defun build-lexical-hover-value (name type init)
+  "Markdown hover value. Skeleton:
+
+  **NAME** : `TYPE`         (omit \" : ...\" when TYPE is uninformative)
+
+  ```lisp
+  NAME = INIT                (omit the whole block when INIT is NIL)
+  ```
+
+Returns NIL when neither TYPE nor INIT carries useful information --
+the caller then falls through to the docstring path, so we don't
+display a bare `**name**' that adds nothing."
+  (let ((show-type (not (lexical-hover-uninformative-p type)))
+        (show-init (not (null init))))
+    (cond
+      ((not (or show-type show-init)) nil)
+      (t
+       (with-output-to-string (s)
+         (cond
+           (show-type (format s "**~A** : `~S`" name type))
+           (t         (format s "**~A**" name)))
+         (when show-init
+           (format s "~%~%```lisp~%~A = ~S~%```" name init)))))))
+
+(defun lsp-hover-markup (value &key (kind *hover-content-format*))
+  "Wrap VALUE in the LSP Hover hash-table shape. Returns NIL when
+VALUE is NIL or empty so call sites can chain with OR."
+  (when (and value (plusp (length value)))
+    (let ((h (make-hash-table :test 'equal))
+          (c (make-hash-table :test 'equal)))
+      (setf (gethash "kind" c) kind
+            (gethash "value" c) value
+            (gethash "contents" h) c)
+      h)))
+
+(defun docstring-hover (doc sym)
+  "Original hover behaviour: ask swank for SYM's documentation. When
+swank returns the \"Can't find documentation for SYM\" placeholder,
+treat it as no answer (returning NIL so hover-handler responds with
+JSON null)."
+  (let* ((pkg (current-package-for-document doc))
+         (doc-string (handler-case
+                         (with-swank-buffer-package (pkg)
+                           (swank:documentation-symbol sym))
+                       (error () nil))))
+    (cond
+      ((or (null doc-string) (string= doc-string "")) nil)
+      ((string-equal doc-string
+                     (format nil "Can't find documentation for ~A" sym))
+       nil)
+      (t (lsp-hover-markup doc-string :kind "plaintext")))))
 
 ;;;; -- textDocument/signatureHelp --
 
