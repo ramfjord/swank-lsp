@@ -30,3 +30,14 @@
         (and ftype (extract-return-type ftype))))))
 
 (setf *derive-backend* 'sbcl-compile-derived-type-of)
+
+(defun sbcl-function-ftype (symbol)
+  (and (fboundp symbol)
+       (ignore-errors (sb-introspect:function-type symbol))))
+
+(defun sbcl-function-lambda-list (symbol)
+  (and (fboundp symbol)
+       (ignore-errors (sb-introspect:function-lambda-list symbol))))
+
+(setf *ftype-backend*        'sbcl-function-ftype)
+(setf *lambda-list-backend*  'sbcl-function-lambda-list)

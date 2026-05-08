@@ -380,13 +380,13 @@ first."
               "Outer-scope binder (line 0) should not appear; got lines ~A" lines))))))
 
 (test references-on-non-local-returns-project-xrefs
-  "Cursor on a global like `list` triggers the cross-file fan-out:
-swank's xref tables filtered to the running server's project root.
-The test image has loaded swank-lsp, whose source calls `list` from
-many places, so we expect ≥1 location, all under the project root.
-Filter correctness (no swank/alexandria/sbcl callers leaking through)
-is what makes this useful — asserted by checking every URI sits
-under the running server's root."
+  "Cursor on a global like `list` triggers the project-source scan:
+walk every .lisp file under the running server's project root,
+return source occurrences. swank-lsp's own source uses `list`
+heavily, so we expect ≥1 location, all under the project root.
+
+Filter correctness — no .qlot/ deps, no SBCL/swank xref noise —
+is what makes this useful, asserted via the under-root check."
   (let ((uri "file:///tmp/wire-refs-list.lisp")
         (text "(list 1 2 3)"))
     (with-defn-fixture (sock uri text)

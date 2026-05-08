@@ -110,6 +110,11 @@ index whose value is <= N. Line breaks recognized: \\r\\n, \\n, \\r."
 
 ;;;; LSP position <-> char offset
 
+(declaim (ftype (function (string integer integer
+                                  &key (:encoding (member :utf-8 :utf-16 :utf-32))
+                                       (:line-starts (or null vector)))
+                          integer)
+                lsp-position->char-offset))
 (defun lsp-position->char-offset (text line lsp-character
                                   &key (encoding *server-position-encoding*)
                                        (line-starts nil))
@@ -153,14 +158,18 @@ end of the previous line *excluding* its terminator."
       (decf p))
     p))
 
+(declaim (ftype (function (string integer
+                                  &key (:encoding (member :utf-8 :utf-16 :utf-32))
+                                       (:line-starts (or null vector)))
+                          (values integer integer &optional))
+                char-offset->lsp-position))
 (defun char-offset->lsp-position (text char-offset
                                   &key (encoding *server-position-encoding*)
                                        (line-starts nil))
   "Inverse of LSP-POSITION->CHAR-OFFSET. Returns (VALUES LINE
 LSP-CHARACTER). If CHAR-OFFSET is beyond the text, clamps to end."
   (let* ((starts (or line-starts (compute-line-starts text)))
-         (text-len (length text))
-         (off (max 0 (min char-offset text-len)))
+         (off (max 0 (min char-offset (length text))))
          ;; Binary-search for largest line-start <= off.
          (line (line-of-offset starts off))
          (line-start (aref starts line))

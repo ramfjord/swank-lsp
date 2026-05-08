@@ -453,23 +453,24 @@ macro chain to its defmacro."
 (defun references-handler (params)
   "Return references for the cursor.
 
-LOCAL bindings → local-references only (lexicals don't cross files;
-including swank xref hits would conflate same-name distinct binders).
+LOCAL bindings → local-references only (lexicals don't cross files).
 
-Anything else → union of local + swank xref hits, deduped. Cross-
-file coverage relies on swank's xref tables, which only hold entries
-for symbols compiled into the image. The recommended deployment is
-to host swank-lsp inside your dev image (the same one you load your
-project into for vlime / REPL work). See README."
+Globals → project-source-references: walk every .lisp file under
+the project root and surface source-level occurrences.
+
+We deliberately do NOT use swank's xref tables for globals. SBCL's
+who-calls runs on *macroexpanded* code, so any caller of a macro
+that itself uses `char=` is reported as a `char=` caller — which
+would surface, e.g., every caller of WITH-SWANK-BUFFER-PACKAGE as a
+hit on `char=`. Source-scan asks the question the LSP convention
+expects: where does this symbol *appear* in source."
   (let ((ctx (build-defn-ctx params)))
     (cond
       ((null ctx) +json-null+)
       ((cursor-is-local-p ctx)
        (or (local-references ctx) +json-null+))
       (t
-       (or (dedup-locations
-            (append (or (local-references ctx) '())
-                    (or (swank-references ctx) '())))
+       (or (dedup-locations (project-source-references ctx))
            +json-null+)))))
 
 (defun cursor-is-local-p (ctx)
@@ -484,59 +485,92 @@ no occurrence, or non-local provenance."
          (typep (cl-scope-resolver:occurrence-provenance occ)
                 'cl-scope-resolver:local))))
 
-(defun swank-references (ctx)
-  "Cross-file references via swank's xref tables. Queries :calls,
-:references, and :macroexpands and unions the results.
+(defparameter *reference-scan-skip-dirs*
+  '(".qlot" ".git" ".cache" "node_modules" "tmp" "_build")
+  "Directory basenames pruned during the project-source-references file
+walk. `.qlot/` holds vendored deps; `.git/` is VCS; the rest are
+common build/cache ejecta. Anything beneath them is considered
+foreign to the project and not surfaced as a reference.")
 
-Filtered to the running server's project root. swank's xref tables
-are image-global — without this filter, `gr gethash` would return
-every caller in swank, alexandria, sbcl, and every other loaded
-system. We want refs inside *this* project.
+(defun project-source-references (ctx)
+  "Find occurrences of the cursor's symbol name across project source
+files. LSP-textDocument/references semantics: where does this
+symbol appear in source?
 
-Returns NIL when swank has no xref data for the symbol (typically
-because the project hasn't been loaded into this image) or when
-every xref is outside the project root."
-  (let* ((sym-name (defn-ctx-sym ctx))
-         (pkg-name (defn-ctx-pkg ctx))
-         (root (and *server* (running-server-project-root *server*)))
-         (xrefs (handler-case
-                    (with-swank-buffer-package (pkg-name)
-                      (swank:xrefs '(:calls :references :macroexpands)
-                                   sym-name))
-                  (error () nil)))
-         (results '()))
-    (dolist (kind-block xrefs)
-      ;; kind-block shape: (kind . entries), where each entry is a
-      ;; two-element list (name-string location-plist) — see swank's
-      ;; xref>elisp. NOT (name . loc); a cons would silently give us
-      ;; (loc) and definition-entry->location-info returns NIL on the
-      ;; wrapped form.
-      (dolist (entry (rest kind-block))
-        (let* ((loc (second entry)))
-          (when (path-in-project-p (location-plist-file loc) root)
-            (let ((info (definition-entry->location-info loc pkg-name)))
-              (when info
-                (push (apply #'make-lsp-location info) results)))))))
-    (nreverse results)))
+For each .lisp file under the project root (skipping
+*REFERENCE-SCAN-SKIP-DIRS*):
+  - run cl-scope-resolver:analyze
+  - keep occurrences whose SYMBOL-NAME matches the cursor's name
+  - drop occurrences with LOCAL provenance — those are unrelated
+    same-name lexicals (a let-bound `char` in some helper isn't a
+    reference to the global CHAR= the user is asking about)
 
-(defun location-plist-file (loc)
-  "Return the file path string from a swank :location plist, or NIL.
-Shape: (:location (:file PATH) (:position N) (:snippet S))."
-  (when (and (consp loc) (eq (first loc) :location))
-    (let ((file-form (assoc :file (rest loc))))
-      (and file-form (second file-form)))))
+Returns a list of LSP Locations. NIL when no project root or no
+matching occurrences."
+  (let* ((root (and *server* (running-server-project-root *server*)))
+         (target-name (string-upcase (defn-ctx-sym ctx))))
+    (when root
+      (let ((results '()))
+        (dolist (file (collect-project-lisp-files root))
+          (dolist (loc (file-references file target-name))
+            (push loc results)))
+        (nreverse results)))))
 
-(defun path-in-project-p (path root)
-  "T if PATH is underneath ROOT. ROOT NIL means \"no filter\" (don't
-silently swallow refs when we forgot to capture a root); PATH NIL
-means \"swank gave us a non-file location\" — drop it, since we
-can't render or filter it anyway."
-  (cond
-    ((null path) nil)
-    ((null root) t)
-    (t
-     (let ((p (handler-case (truename path) (error () nil))))
-       (and p (uiop:subpathp p root))))))
+(defun collect-project-lisp-files (root)
+  "Recursively walk ROOT, returning .lisp file pathnames. Prunes any
+directory whose basename is in *REFERENCE-SCAN-SKIP-DIRS*."
+  (let ((files '()))
+    (labels ((walk (dir)
+               (dolist (sub (uiop:subdirectories dir))
+                 (let ((basename (car (last (pathname-directory sub)))))
+                   (unless (member basename *reference-scan-skip-dirs*
+                                   :test #'string=)
+                     (walk sub))))
+               (dolist (f (uiop:directory-files dir))
+                 (when (and (pathname-type f)
+                            (string-equal (pathname-type f) "lisp"))
+                   (push f files)))))
+      (walk root))
+    (nreverse files)))
+
+(defun file-references (path target-name)
+  "Return list of LSP Locations in PATH whose symbol-atom matches
+TARGET-NAME (string). Skips occurrences with LOCAL provenance.
+
+Prefers the in-memory document text over the on-disk version when
+the file is open in the editor — otherwise the user's unsaved edits
+wouldn't show up in `gr` results."
+  (let* ((uri (path-to-file-uri path))
+         (open-doc (lookup-document uri))
+         (text (or (and open-doc (document-text open-doc))
+                   (handler-case (alexandria:read-file-into-string path)
+                     (error () nil)))))
+    (when text
+      (let* ((analysis (handler-case (cl-scope-resolver:analyze text)
+                         (error () nil)))
+             (line-starts (compute-line-starts text)))
+        (when analysis
+          (loop for occ in (cl-scope-resolver:analysis-occurrences analysis)
+                for occ-name = (cl-scope-resolver:occurrence-name occ)
+                when (and (symbolp occ-name)
+                          (string= (symbol-name occ-name) target-name)
+                          (not (typep (cl-scope-resolver:occurrence-provenance occ)
+                                      'cl-scope-resolver:local)))
+                  collect (lsp-location-from-range
+                           uri
+                           (char-range->lsp-range
+                            text
+                            (cl-scope-resolver:occurrence-start occ)
+                            (cl-scope-resolver:occurrence-end occ)
+                            :encoding *server-position-encoding*
+                            :line-starts line-starts))))))))
+
+(defun path-to-file-uri (path)
+  "Convert a pathname to a file:// URI string."
+  (concatenate 'string
+               "file://"
+               (namestring (handler-case (truename path)
+                             (error () path)))))
 
 (defun location-key (loc)
   "(uri start-line start-char end-line end-char) — Location identity
@@ -810,9 +844,58 @@ the docstring path."
              (free      (cl-scope-resolver:enclosing-lexicals bi))
              (declares  (cl-scope-resolver:local-declares-for
                          bi (cons name free)))
-             (type-spec (derive-type-for-binder name init free declares))
-             (value     (build-lexical-hover-value name type-spec init)))
+             (type-spec (derive-type-for-binder doc bi name init free declares))
+             (enclosing (cl-scope-resolver:binder-info-enclosing-function-name bi))
+             (mutations (lexical-mutations-for bi text))
+             (value     (build-lexical-hover-value
+                         name type-spec init enclosing mutations)))
         (lsp-hover-markup value)))))
+
+(defun lexical-mutations-for (bi text)
+  "List of (LINE . SNIPPET) pairs, one per write occurrence of BI's
+binder, in source order. SNIPPET is the source text of the smallest
+enclosing form that contains the write atom (typically `(setf X v)'
+or `(incf X)'); LINE is its 1-based line number.
+
+Returns NIL when no writes — the hover renderer omits the block in
+that case."
+  (let* ((analysis (handler-case (cl-scope-resolver:analyze text)
+                     (error () nil)))
+         (writes (and analysis
+                      (cl-scope-resolver:binder-info-write-occurrences
+                       bi analysis))))
+    (loop for occ in writes
+          for occ-start = (cl-scope-resolver:occurrence-start occ)
+          for snippet   = (mutation-snippet-at text occ-start)
+          when snippet
+            collect (cons (1+ (line-number-of text occ-start)) snippet))))
+
+(defun line-number-of (text offset)
+  "0-based line number of OFFSET in TEXT."
+  (line-of-offset (compute-line-starts text) offset))
+
+(defun mutation-snippet-at (text occ-start)
+  "Return the source slice of the smallest cons CST that encloses
+OCC-START -- i.e. the assignment form like `(incf i)' or `(setf i
+(+ i 1))'. NIL on failure or when no enclosing cons is found."
+  (let* ((csts (handler-case (cl-scope-resolver:cst-from-string text)
+                 (error () nil)))
+         (path (and csts (cl-scope-resolver:cst-path-to-offset
+                          csts occ-start)))
+         (enclosing-cons (and path (last-enclosing-cons (butlast path)))))
+    (when enclosing-cons
+      (multiple-value-bind (s e)
+          (cl-scope-resolver:cst-source-range enclosing-cons)
+        (and s e (subseq text s e))))))
+
+(defun last-enclosing-cons (path)
+  "Right-most CONS-CST in PATH (a list of CSTs, top-first). Returns
+NIL when PATH has no cons -- e.g. the user clicked at the very top
+level. Walks from the deep end so we get the *immediate* parent
+cons, not the outermost top form."
+  (loop for c in (reverse path)
+        when (typep c 'concrete-syntax-tree:cons-cst)
+          return c))
 
 (defun binder-info-offset-redirected (text offset)
   "Workaround for the upstream gap in cl-scope-resolver:binder-info-at:
@@ -840,14 +923,41 @@ shim collapses to (text offset)."
        (cl-scope-resolver:local-start prov))
       (t offset))))
 
-(defun derive-type-for-binder (name init free declares)
+(defun derive-type-for-binder (doc bi name init free declares)
   "For let/let*/mvb: derive the init-form's type. For params (no
 init): derive the type of the binder NAME itself, with DECLARES
 forwarded -- so a (declare (fixnum x)) on a defun param yields
-FIXNUM. Returns NIL if no backend is registered."
+FIXNUM.
+
+When the synth-lambda result is uninformative (T/*) and the binder
+is a defun parameter, fall back to the enclosing function's
+proclaimed ftype: this is what makes a top-level (declaim (ftype
+(function (string) ...) FOO)) pay off for K on FOO's params even
+without an in-body declare. Returns NIL if no backend is registered."
   (cond
     (init (compile-derived-type-of init free declares))
-    (t    (compile-derived-type-of name (cons name free) declares))))
+    (t    (let ((primary (compile-derived-type-of name (cons name free) declares)))
+            (if (lexical-hover-uninformative-p primary)
+                (or (param-type-via-doc doc bi name) primary)
+                primary)))))
+
+(defun param-type-via-doc (doc bi param-name)
+  "If BI is a :defun-param with an enclosing function whose name we
+can resolve in DOC's package, return the param's type from the
+function's stored ftype. Otherwise NIL.
+
+cl-scope-resolver returns the function name as the symbol it read
+during its CST pass -- usually CL-USER -- so we re-resolve by
+SYMBOL-NAME in the document's package to land on the actual symbol
+the loaded image knows about."
+  (let ((raw (cl-scope-resolver:binder-info-enclosing-function-name bi)))
+    (when raw
+      (let* ((pkg-name (current-package-for-document doc))
+             (pkg (or (and pkg-name (find-package (string-upcase pkg-name)))
+                      *package*))
+             (sym (find-symbol (symbol-name raw) pkg)))
+        (when sym
+          (param-type-from-ftype sym param-name))))))
 
 (defun lexical-hover-uninformative-p (type)
   "T and * are SBCL's spellings of \"no information.\" Treating both
@@ -855,29 +965,49 @@ as suppress-the-type-line until commit 4's simplifier subsumes the
 rule."
   (or (null type) (eq type t) (eq type '*)))
 
-(defun build-lexical-hover-value (name type init)
+(defun build-lexical-hover-value (name type init
+                                  &optional enclosing-fn mutations)
   "Markdown hover value. Skeleton:
 
-  **NAME** : `TYPE`         (omit \" : ...\" when TYPE is uninformative)
+  **NAME** : `TYPE`               (omit \" : ...\" when TYPE is uninformative)
+  *param of `FN`*                  (only when ENCLOSING-FN is non-NIL)
 
   ```lisp
-  NAME = INIT                (omit the whole block when INIT is NIL)
+  NAME := INIT                     (omit when INIT is NIL)
   ```
 
-Returns NIL when neither TYPE nor INIT carries useful information --
-the caller then falls through to the docstring path, so we don't
-display a bare `**name**' that adds nothing."
-  (let ((show-type (not (lexical-hover-uninformative-p type)))
-        (show-init (not (null init))))
+  Mutated at:                      (whole block omitted when MUTATIONS is NIL)
+  - LINE: `SNIPPET`
+  - ...
+
+ENCLOSING-FN is shown so the user can tell at a glance that they're
+hovering on a parameter (vs a let binding).
+
+MUTATIONS is a list of (LINE . SNIPPET) pairs — one per syntactic
+write site (setq/setf/incf/decf/multiple-value-setq). Showing them
+inline only when present is intentional: an unmutated lexical gets
+a calm hover; a mutated one gets the audit trail.
+
+Returns NIL when nothing carries useful information."
+  (let ((show-type   (not (lexical-hover-uninformative-p type)))
+        (show-init   (not (null init)))
+        (show-encl   (not (null enclosing-fn)))
+        (show-mut    (not (null mutations))))
     (cond
-      ((not (or show-type show-init)) nil)
+      ((not (or show-type show-init show-encl show-mut)) nil)
       (t
        (with-output-to-string (s)
          (cond
            (show-type (format s "**~A** : `~S`" name type))
            (t         (format s "**~A**" name)))
+         (when show-encl
+           (format s "~%~%*param of `~A`*" (symbol-name enclosing-fn)))
          (when show-init
-           (format s "~%~%```lisp~%~A = ~S~%```" name init)))))))
+           (format s "~%~%```lisp~%~A := ~S~%```" name init))
+         (when show-mut
+           (format s "~%~%Mutated at:")
+           (dolist (m mutations)
+             (format s "~%- ~A: `~A`" (car m) (cdr m)))))))))
 
 (defun lsp-hover-markup (value &key (kind *hover-content-format*))
   "Wrap VALUE in the LSP Hover hash-table shape. Returns NIL when
@@ -891,21 +1021,86 @@ VALUE is NIL or empty so call sites can chain with OR."
       h)))
 
 (defun docstring-hover (doc sym)
-  "Original hover behaviour: ask swank for SYM's documentation. When
-swank returns the \"Can't find documentation for SYM\" placeholder,
-treat it as no answer (returning NIL so hover-handler responds with
-JSON null)."
+  "Hover content for a global symbol: arglist (when fbound) plus
+docstring (when documented). Returns the combined markdown payload,
+or NIL when the symbol carries neither — falling through to JSON
+null.
+
+Showing the arglist regardless of docstring is the win here: many
+CL builtins (e.g. VECTOR-PUSH-EXTEND on SBCL) have no docstring but
+a perfectly serviceable lambda list, and seeing
+\"(vector-push-extend new-element vector &optional min-extension)\"
+on K is exactly the help the user needs."
   (let* ((pkg (current-package-for-document doc))
-         (doc-string (handler-case
-                         (with-swank-buffer-package (pkg)
-                           (swank:documentation-symbol sym))
-                       (error () nil))))
+         (arglist  (function-arglist-string sym pkg))
+         (doc-text (function-doc-string sym pkg))
+         (home-pkg (function-home-package sym pkg)))
     (cond
-      ((or (null doc-string) (string= doc-string "")) nil)
-      ((string-equal doc-string
-                     (format nil "Can't find documentation for ~A" sym))
-       nil)
-      (t (lsp-hover-markup doc-string :kind "plaintext")))))
+      ((and (null arglist) (null doc-text)) nil)
+      (t (lsp-hover-markup
+          (build-docstring-hover-value arglist doc-text home-pkg))))))
+
+(defun function-home-package (sym pkg-name)
+  "Resolve the string SYM to a CL symbol in PKG-NAME and return its
+home package's NAME (a string), or NIL when we can't resolve it.
+
+The home package is an honest bit of info even when SBCL ships no
+docstring: a hover for VECTOR-PUSH-EXTEND that says \"in
+COMMON-LISP\" tells the user this is a standard function and
+they're not looking at something local that happens to share the
+name."
+  (let ((p (and pkg-name (find-package (string-upcase pkg-name)))))
+    (when p
+      (let ((s (find-symbol (string-upcase sym) p)))
+        (and s (symbol-package s)
+             (package-name (symbol-package s)))))))
+
+(defun function-arglist-string (sym pkg)
+  "Ask swank for SYM's arglist in PKG. Returns the formatted string
+or NIL when swank has nothing useful (empty / errored / not fbound)."
+  (let ((arglist (handler-case
+                     (with-swank-buffer-package (pkg)
+                       (swank:operator-arglist sym pkg))
+                   (error () nil))))
+    (cond
+      ((null arglist) nil)
+      ((string= arglist "") nil)
+      (t arglist))))
+
+(defun function-doc-string (sym pkg)
+  "Ask swank for SYM's docstring in PKG, filtering out swank's
+\"Can't find documentation for X\" placeholder."
+  (let ((s (handler-case
+               (with-swank-buffer-package (pkg)
+                 (swank:documentation-symbol sym))
+             (error () nil))))
+    (cond
+      ((or (null s) (string= s "")) nil)
+      ((string-equal s (format nil "Can't find documentation for ~A" sym)) nil)
+      (t s))))
+
+(defun build-docstring-hover-value (arglist doc-text home-pkg)
+  "Markdown layout:
+
+  ```lisp
+  ARGLIST
+  ```
+  *in `HOME-PKG`*
+
+  DOC-TEXT
+
+ARGLIST and DOC-TEXT are optional independently; HOME-PKG only
+renders when ARGLIST does (it labels the arglist's home, so the
+two go together)."
+  (with-output-to-string (s)
+    (when arglist
+      (format s "```lisp~%~A~%```" arglist)
+      (when home-pkg
+        (format s "~%~%*in `~A`*" home-pkg)))
+    (when (and (or arglist home-pkg) doc-text)
+      (format s "~%~%"))
+    (when doc-text
+      (format s "~A" doc-text))))
 
 ;;;; -- textDocument/signatureHelp --
 
