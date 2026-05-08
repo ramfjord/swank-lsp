@@ -26,6 +26,8 @@ One of :utf-8, :utf-16, :utf-32.")
 
 ;;;; Encoding selection
 
+(declaim (ftype (function (t) (member :utf-8 :utf-16 :utf-32))
+                negotiate-position-encoding))
 (defun negotiate-position-encoding (client-encodings)
   "Given the client's offered list of position encoding strings (or
 NIL), return the keyword for the encoding the server should use.
@@ -41,6 +43,8 @@ UTF-16 (LSP default), otherwise UTF-32."
       ;; at all, fall back to utf-16 (LSP default).
       (t :utf-16))))
 
+(declaim (ftype (function ((member :utf-8 :utf-16 :utf-32)) string)
+                position-encoding-name))
 (defun position-encoding-name (kw)
   (ecase kw
     (:utf-8  "utf-8")
@@ -49,6 +53,7 @@ UTF-16 (LSP default), otherwise UTF-32."
 
 ;;;; Line-start cache
 
+(declaim (ftype (function (string) (vector fixnum)) compute-line-starts))
 (defun compute-line-starts (text)
   "Return a vector of character offsets where each line starts.
 Element 0 is always 0. The line containing offset N is the largest
@@ -77,7 +82,12 @@ index whose value is <= N. Line breaks recognized: \\r\\n, \\n, \\r."
 
 ;;;; UTF-16 / UTF-8 width of a single Lisp character
 
-(declaim (inline utf16-units utf8-units))
+(declaim (inline utf16-units utf8-units)
+         (ftype (function (character) (integer 1 2)) utf16-units)
+         (ftype (function (character) (integer 1 4)) utf8-units)
+         (ftype (function (character (member :utf-8 :utf-16 :utf-32))
+                          (integer 1 4))
+                char-units))
 
 (defun utf16-units (char)
   "How many UTF-16 code units does CHAR occupy? 1 for BMP (<= #xFFFF),
@@ -159,6 +169,7 @@ LSP-CHARACTER). If CHAR-OFFSET is beyond the text, clamps to end."
       (incf units (char-units (char text i) encoding)))
     (values line units)))
 
+(declaim (ftype (function ((vector fixnum) integer) fixnum) line-of-offset))
 (defun line-of-offset (line-starts offset)
   "Largest index in LINE-STARTS whose value is <= OFFSET. Binary search."
   (let ((lo 0)
@@ -172,6 +183,7 @@ LSP-CHARACTER). If CHAR-OFFSET is beyond the text, clamps to end."
 
 ;;;; LSP Range helpers (used by handlers)
 
+(declaim (ftype (function (integer integer) hash-table) make-lsp-position))
 (defun make-lsp-position (line character)
   "Construct a hash-table representing an LSP Position object."
   (let ((h (make-hash-table :test 'equal)))
@@ -179,6 +191,8 @@ LSP-CHARACTER). If CHAR-OFFSET is beyond the text, clamps to end."
           (gethash "character" h) character)
     h))
 
+(declaim (ftype (function (integer integer integer integer) hash-table)
+                make-lsp-range))
 (defun make-lsp-range (start-line start-char end-line end-char)
   (let ((h (make-hash-table :test 'equal)))
     (setf (gethash "start" h) (make-lsp-position start-line start-char)

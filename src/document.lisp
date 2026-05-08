@@ -56,6 +56,8 @@
 Each translator is called as (TRANSLATOR URI TEXT) and must return a
 new TEXT string. See APPLY-BYTE-STREAM-TRANSLATOR.")
 
+(declaim (ftype (function ((or null string) (or null string)) (or null string))
+                apply-byte-stream-translator))
 (defun apply-byte-stream-translator (uri text)
   "If URI's extension is registered in *BYTE-STREAM-TRANSLATORS*, call
 that translator on (URI, TEXT) and return its result. Otherwise return
@@ -90,6 +92,7 @@ TEXT unchanged. NIL URI / NIL TEXT short-circuit to TEXT."
       (remhash uri *document-store*)
       (and existed t))))
 
+(declaim (ftype (function () (integer 0 *)) document-count))
 (defun document-count ()
   (bordeaux-threads:with-lock-held (*document-store-lock*)
     (hash-table-count *document-store*)))
@@ -125,6 +128,7 @@ signalled (caller treats NIL the same as 'nothing classifiable')."
 ;;;; Heuristics over document text -- used by handlers to extract a
 ;;;; symbol or completion prefix at a given character offset.
 
+(declaim (ftype (function (t) boolean) symbol-char-p))
 (defun symbol-char-p (c)
   "Conservative \"part of a Lisp symbol name\" predicate. Includes
 characters commonly appearing in CL package-qualified symbols. Excludes
@@ -135,6 +139,10 @@ backslash, and double-quote."
                         #\( #\) #\' #\` #\, #\; #\\ #\")
                     :test #'char=))))
 
+(declaim (ftype (function (string integer)
+                          (values (or null string) &optional
+                                  (or null fixnum) (or null fixnum)))
+                extract-symbol-at))
 (defun extract-symbol-at (text offset)
   "Return (VALUES SYMBOL-NAME START END) where SYMBOL-NAME is the
 substring of TEXT containing the symbol at OFFSET, START is its
@@ -165,6 +173,8 @@ considered to be \"at\" OFFSET -- hover/definition want this."
             nil
             (values (subseq text start end) start end))))))
 
+(declaim (ftype (function (string integer) (values string fixnum &optional))
+                extract-prefix-at))
 (defun extract-prefix-at (text offset)
   "For completion: return the substring of TEXT immediately before
 OFFSET that looks like a partial symbol. May be empty. Always returns
@@ -182,6 +192,8 @@ a string and the start offset of the prefix."
 ;;;; (in-package ...) form; for Phase 1 we return :CL-USER unless one of
 ;;;; the document's first ~20 lines has a recognizable in-package form.
 
+(declaim (ftype (function ((or null document)) string)
+                current-package-for-document))
 (defun current-package-for-document (doc)
   "Best-effort package name for DOC. Returns a string suitable for
 swank's PACKAGE arg."

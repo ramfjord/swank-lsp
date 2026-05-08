@@ -820,7 +820,13 @@ when the cursor is on a USE of a local binder, RESOLVE points at the
 binder via LOCAL's start/end but BINDER-INFO-AT itself only
 classifies binder-position cursors. Redirect uses to the binder
 location before calling. Returns the offset to call BINDER-INFO-AT
-with, or NIL if there's nothing local at the cursor.
+with.
+
+Note: RESOLVE returns NONE :NOT-A-REFERENCE when the cursor sits on
+a binder name -- by design, since a binder isn't a reference. In
+that case we just hand back OFFSET, since BINDER-INFO-AT itself
+handles binder-position cursors correctly. Only when RESOLVE
+returns a LOCAL pointing elsewhere do we redirect.
 
 TODO(upstream): cl-scope-resolver:binder-info-at should follow LOCAL
 provenance back to the binder internally; once that lands, this
@@ -828,12 +834,11 @@ shim collapses to (text offset)."
   (let ((prov (handler-case (cl-scope-resolver:resolve text offset)
                 (error () nil))))
     (cond
-      ((null prov) nil)
-      ((and (cl-scope-resolver:local-p prov)
+      ((and prov
+            (cl-scope-resolver:local-p prov)
             (not (cl-scope-resolver:local-cursor-on-binder-p prov)))
        (cl-scope-resolver:local-start prov))
-      ((cl-scope-resolver:local-p prov) offset)
-      (t nil))))
+      (t offset))))
 
 (defun derive-type-for-binder (name init free declares)
   "For let/let*/mvb: derive the init-form's type. For params (no
