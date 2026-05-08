@@ -392,22 +392,17 @@ to finish so the test isn't racy."
   (let ((uri "file:///tmp/wire-refs-list.lisp")
         (text "(list 1 2 3)"))
     (with-defn-fixture (sock uri text)
-      ;; The shared test server was started via START-SERVER, which
-      ;; does not attach a project index (only START-AND-PUBLISH does).
-      ;; Attach one here pointing at the swank-lsp source root, then
-      ;; wait for the bulk-index thread before querying.
-      (let ((root (truename "/home/tramfjord/projects/swank-lsp/")))
-        (unless (swank-lsp::running-server-index-conn swank-lsp::*server*)
-          (swank-lsp::start-server-index swank-lsp::*server* root))
-        (let ((idx-thread (swank-lsp::running-server-index-thread
-                           swank-lsp::*server*)))
-          (when idx-thread
-            (handler-case (bordeaux-threads:join-thread idx-thread)
-              (error () nil))))
-        ;; Set project-root too so the local-references path / future
-        ;; under-root checks see the same value.
-        (setf (swank-lsp::running-server-project-root swank-lsp::*server*)
-              root))
+      ;; START-SERVER attaches the index automatically pointing at
+      ;; *default-pathname-defaults* (which the test suite runs from
+      ;; the project root, so it's the right path). We just need to
+      ;; wait for the bulk-index thread to finish before querying so
+      ;; the test isn't racy.
+      (let ((idx-thread (and swank-lsp::*server*
+                             (swank-lsp::running-server-index-thread
+                              swank-lsp::*server*))))
+        (when idx-thread
+          (handler-case (bordeaux-threads:join-thread idx-thread)
+            (error () nil))))
       (let ((result (references-at sock uri 0 1)))   ; cursor on `list'
         (is (and (listp result) (not (null result)))
             "Expected non-empty cross-file refs, got ~A" result)

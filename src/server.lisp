@@ -123,6 +123,7 @@ Returns the RUNNING-SERVER instance."
            (setf (running-server-thread rs) thread)
            ;; Wait briefly until the port is actually listening.
            (wait-until-listening host bound-port 5)
+           (start-server-index-best-effort rs)
            rs)))
       (:stdio
        (let ((rs (make-instance 'running-server
@@ -131,6 +132,7 @@ Returns the RUNNING-SERVER instance."
                                 :port nil
                                 :project-root root)))
          (setf *server* rs)
+         (start-server-index-best-effort rs)
          ;; stdio start-server blocks the calling thread on the read loop.
          (let ((bt:*default-special-bindings* nil))
            (declare (ignorable bt:*default-special-bindings*)))
@@ -138,6 +140,20 @@ Returns the RUNNING-SERVER instance."
                                 :input  (or input  *standard-input*)
                                 :output (or output *standard-output*))
          rs)))))
+
+(defun start-server-index-best-effort (rs)
+  "Open the project xref index for *DEFAULT-PATHNAME-DEFAULTS* and
+kick off a background bulk pass. Wrapped in HANDLER-CASE so a
+non-git directory or missing sqlite library doesn't kill server
+startup -- the LSP still serves single-buffer features (hover,
+completion, definition, local references) without an index;
+only project-wide gr depends on it."
+  (handler-case
+      (start-server-index rs *default-pathname-defaults*)
+    (error (e)
+      (format *error-output*
+              "~&swank-lsp: index startup failed: ~A~%" e)
+      (force-output *error-output*))))
 
 (defvar *published-port-file* nil
   "Pathname of the .swank-lsp-port file we wrote, so STOP-SERVER can
@@ -182,17 +198,6 @@ at a dead listener."
                               :if-exists :supersede
                               :if-does-not-exist :create)
       (format out "~A~%" bound))
-    ;; Open the project xref index and kick off a background bulk
-    ;; pass. Project root = *default-pathname-defaults* — same
-    ;; convention as port-file resolution above. If the directory
-    ;; isn't a git working tree, the bulk thread logs and exits;
-    ;; the LSP itself stays up (single-buffer features still work).
-    (handler-case
-        (start-server-index rs *default-pathname-defaults*)
-      (error (e)
-        (format *error-output*
-                "~&swank-lsp: index startup failed: ~A~%" e)
-        (force-output *error-output*)))
     (setf *published-port-file* path)
     rs))
 
