@@ -64,6 +64,27 @@ M.defaults = {
   -- markers walking up from the file's directory, so this option is
   -- only relevant for client-side fallback mode.
   elp_package = nil,
+
+  -- Command to bring up a swank-lsp image when one isn't already
+  -- running for this project. Invoked from the project root (root_dir)
+  -- when no .swank-lsp-port is found there. The command is expected
+  -- to (eventually) cause .swank-lsp-port to appear in root_dir; the
+  -- plugin then polls for that file and attaches.
+  --
+  -- Shape: a list of strings (argv) or a function(root_dir) -> argv.
+  -- Examples:
+  --   start_command = { "docker", "compose", "up", "-d", "swank" }
+  --   start_command = { "make", "swank-up" }
+  --   start_command = { "bin/swank-lsp-server.sh", "start" }
+  --
+  -- nil means "no project-specific supervisor; use start_timeout_ms
+  -- after which we fall back to the per-attach SBCL spawn below."
+  start_command = nil,
+
+  -- How long to wait for .swank-lsp-port to appear after start_command
+  -- runs. Docker pulls / qlot installs can be slow on first run, so
+  -- this is generous. Lower it if you want faster fallback to spawn.
+  start_timeout_ms = 30000,
 }
 
 -- ─────────────────────── port-discovery helpers ───────────────────────
@@ -75,6 +96,33 @@ local function read_port_file(p)
   end
 end
 
+-- Wait (synchronously, but yielding to nvim) for a port file to appear
+-- and contain a non-empty port string. Returns the port string or nil.
+local function poll_port_file(path, timeout_ms)
+  local deadline = vim.loop.now() + timeout_ms
+  while vim.loop.now() < deadline do
+    local p = read_port_file(path)
+    if p then return p end
+    vim.wait(100, function() return false end)
+  end
+  return nil
+end
+
+-- Run the user's start_command from cwd, fire-and-forget. The command
+-- is expected to bring up a long-running supervisor (docker compose,
+-- make rule, etc.) that will write .swank-lsp-port. We don't keep a
+-- handle on the process — the supervisor owns lifecycle.
+local function run_start_command(start_command, cwd, root_dir)
+  local cmd = start_command
+  if type(cmd) == "function" then cmd = cmd(root_dir) end
+  if type(cmd) ~= "table" or #cmd == 0 then return end
+  vim.notify("swank-lsp: starting via `" .. table.concat(cmd, " ") .. "`",
+             vim.log.levels.INFO)
+  -- vim.system returns immediately when we don't :wait(). Process is
+  -- detached enough that the supervisor outlives this nvim if needed.
+  vim.system(cmd, { cwd = cwd, detach = true })
+end
+
 -- Resolve which command + env to use for attaching this buffer's LSP.
 -- Priority order:
 --   1. $SWANK_LSP_PORT — explicit override, useful for quick tests
@@ -82,7 +130,9 @@ end
 --      being edited (e.g. via that project's start-image.sh)
 --   3. <swank_lsp_root>/.swank-lsp-port — swank-lsp's own dev image,
 --      for working ON swank-lsp itself
---   4. Auto-spawn fresh SBCL per attach (qlot if available, else bare sbcl)
+--   4. opts.start_command — user-configured supervisor (docker, make,
+--      systemd, ...). Run it, then poll for .swank-lsp-port.
+--   5. Auto-spawn fresh SBCL per attach (qlot if available, else sbcl)
 --
 -- Returns (cmd_table, cmd_env_table_or_nil).
 local function resolve_cmd(opts, root_dir)
@@ -113,7 +163,20 @@ local function resolve_cmd(opts, root_dir)
     return attach(global_port)
   end
 
-  -- 4. auto-spawn
+  -- 4. user-configured supervisor: run it, then wait for the port file
+  if opts.start_command and root_dir
+     and vim.fn.executable(attach_shim) == 1 then
+    run_start_command(opts.start_command, root_dir, root_dir)
+    local port = poll_port_file(root_dir .. "/.swank-lsp-port",
+                                opts.start_timeout_ms)
+    if port then return attach(port) end
+    vim.notify(
+      "swank-lsp: start_command ran but .swank-lsp-port did not appear "
+        .. "within " .. opts.start_timeout_ms .. "ms; falling back to spawn",
+      vim.log.levels.WARN)
+  end
+
+  -- 5. auto-spawn
   local qlot = vim.fn.expand("~/.roswell/bin/qlot")
   if vim.fn.executable(qlot) == 1 then
     return { qlot, "exec", "sbcl", "--noinform", "--script", stdio_script }

@@ -55,78 +55,103 @@ keep by surfacing the meta-level.
 
 ## Running it
 
-Two modes; pick the one that matches your workflow.
+`swank-lsp` is a Common Lisp library. Pull it into your project as a
+dev dependency, call `(swank-lsp:start-and-publish …)` from a long-
+running SBCL, and the nvim plugin discovers the listener via
+`.swank-lsp-port`. *How* you keep that SBCL running is your choice —
+a shell script, `docker compose`, a Makefile, your `~/.sbclrc`,
+systemd. The library doesn't supervise itself.
 
-### Mode 1: attach to your existing dev image (recommended)
-
-You already start an SBCL with swank for vlime. Tell it to also start
-swank-lsp on a TCP port, and have nvim connect to that port. One
-process, no double cold-load, your defmacros are immediately visible
-to the LSP because they live in the same image.
-
-In your `~/.sbclrc` (or a one-shot startup file):
+### The library API
 
 ```lisp
 (ql:quickload :swank-lsp)
-(swank:create-server :port 4005 :dont-close t)         ; vlime port
-;; start-and-publish writes .swank-lsp-port to the project root so the
-;; editor (and any other consumer) can discover the port without an
-;; env var. Mirrors how swank's bootstrap publishes .swank-port and
-;; vlime's .vlime-port.
-(let ((*default-pathname-defaults*
-        (truename "~/projects/swank-lsp/")))
-  (swank-lsp:start-and-publish :port 7777))            ; or :port 0
+(asdf:load-system :my-project)               ; load the project being edited
+(swank-lsp:start-and-publish :port 0)        ; bind a free port; write port file
+;; or :port 7777 to pin
 ```
 
-The nvim plugin discovers the port in this order:
+`start-and-publish` writes `.swank-lsp-port` to
+`*default-pathname-defaults*`, so set that to the project root before
+calling. The default `:host` is `0.0.0.0` so the listener is reachable
+from inside a docker container's published port; pass `:host
+"127.0.0.1"` if you want loopback-only.
 
-1. `$SWANK_LSP_PORT` env var (override; useful for quick testing)
-2. `~/projects/swank-lsp/.swank-lsp-port` (the convention)
-3. fallback to auto-spawn (Mode 2 below)
+### Supervisor option A: a shell script (native)
 
-If discovery succeeds, the plugin runs `bin/swank-lsp-attach.sh`
-(a `socat` shim) to bridge nvim's stdio LSP to the image's TCP
-listener. Multiple nvim windows can attach to the same image.
+`bin/swank-lsp-server.sh` in this repo is one example: `start`,
+`stop`, `bounce`, `status`, with a PID file. Copy it into your project
+and adapt the system name, or write your own — there's nothing magic
+about it.
 
-`stop-server` deletes `.swank-lsp-port` so a stale file can never
-point at a dead listener.
+```sh
+bin/swank-lsp-server.sh start    # writes .swank-lsp-port; image stays up
+```
 
-When you eval a `defmacro` in vlime, the LSP sees it on the next
-request — `gd` on a macro-introduced binding (`via-macros` path) just
-works.
+### Supervisor option B: docker compose
 
-#### Cross-file `gr` needs your project loaded
+A reference `docker-compose.yml`:
 
-`gr` (textDocument/references) returns two kinds of hits:
+```yaml
+services:
+  swank:
+    image: clfoundation/sbcl:latest
+    working_dir: /app
+    volumes:
+      - .:/app                            # so .swank-lsp-port lands on host
+    ports:
+      - "127.0.0.1:7777:7777"             # host loopback only
+    command: >
+      sbcl --non-interactive
+        --eval "(ql:quickload :swank-lsp)"
+        --eval "(asdf:load-system :my-project)"
+        --eval "(swank-lsp:start-and-publish :port 7777 :host \"0.0.0.0\")"
+        --eval "(loop (sleep 60))"
+```
 
-- **Local references** — read out of an in-memory walk of the buffer's
-  text. No image state involved; works on unsaved edits.
-- **Cross-file references** — pulled from swank's xref tables
-  (`who-calls`, `who-references`, `who-macroexpands`).
+`docker compose up -d swank` brings it up; the container writes
+`/app/.swank-lsp-port` which the host sees as `./.swank-lsp-port`;
+nvim attaches via the published `127.0.0.1:7777`. The 0.0.0.0 bind
+inside the container is required (loopback would be unreachable from
+outside the container); the host-side `127.0.0.1:` prefix on `ports:`
+keeps it private to your machine.
 
-swank's xref tables only contain entries for code that has been
-**compiled into this image**. So cross-file `gr` works for symbols
-your dev image has loaded, and returns nothing for symbols it hasn't.
-Save-on-edit will keep things current after the first load (didSave
-calls `swank:load-file`), but you need an initial load.
+### Supervisor option C: your existing dev image
 
-Recommended setups, easiest first:
+If you already start SBCL with swank for vlime, just add two forms:
 
-1. **Edit the project that's already loaded in your dev image.** If
-   you start swank-lsp inside the SBCL you also use for vlime/REPL
-   work — and that image has `(ql:quickload :my-project)` or
-   `(asdf:load-system :my-project)` in it — `gr` on globals just works.
-2. **Use a startup snippet that loads your project explicitly.** See
-   `bin/swank-lsp-with-project.lisp.example` for a template; copy it,
-   adapt the system name, and either eval it or pass it via
-   `sbcl --load`.
-3. **Auto-spawn (Mode 2) won't give you cross-file `gr`** — the
-   spawned image only knows what's in the open buffer.
+```lisp
+(ql:quickload :swank-lsp)
+(swank:create-server :port 4005 :dont-close t)           ; vlime
+(let ((*default-pathname-defaults* (truename ".")))
+  (swank-lsp:start-and-publish :port 0))
+```
+
+One image, one cold load, vlime and the LSP both attached. When you
+eval a `defmacro` in vlime, the LSP sees it on the next request.
+
+### Booting the supervisor when nvim attaches
+
+Configure `start_command` in `setup()` and the plugin runs it
+automatically when no `.swank-lsp-port` is found in the project root,
+then polls for the file and attaches:
+
+```lua
+require("swank-lsp").setup({
+  start_command = { "docker", "compose", "up", "-d", "swank" },
+  -- or { "make", "swank-up" }
+  -- or { "bin/swank-lsp-server.sh", "start" }
+})
+```
+
+The supervisor owns lifecycle (it doesn't die when nvim quits). If
+`start_command` is unset or its port file doesn't appear in time, the
+plugin falls back to a per-attach SBCL spawn (zero config, no
+cross-file features).
 
 ### Discovery convention (for any tool, not just nvim)
 
-Anything that wants to talk to a swank-lsp running in someone's
-image should:
+Anything that wants to talk to a swank-lsp should:
 
 1. Read `.swank-lsp-port` from the project root.
 2. Connect to `127.0.0.1:<port>` and speak LSP over the socket.
@@ -134,22 +159,19 @@ image should:
 
 Same idea swank uses (`.swank-port`) and Vlime (`.vlime-port`): the
 image publishes its discoverable listeners to the filesystem;
-consumers never invent ports. If you (or another agent) want to
-modify the image's behavior, do it through the filesystem — edit a
-file, reload via `(asdf:load-system :swank-lsp :force '(:swank-lsp))`
-or `(claude-tools:reload-form ...)` — not by rewriting symbols
-through eval. Keeps the image and the on-disk truth in sync.
+consumers never invent ports. `stop-server` deletes the file so a
+stale `.swank-lsp-port` can never point at a dead listener.
 
-### Mode 2: auto-spawn (zero-config, slower)
+### Cross-file `gr` needs your project loaded
 
-If `SWANK_LSP_PORT` is unset, the plugin spawns a fresh SBCL per
-nvim attach via `bin/swank-lsp-stdio.lisp`. ~3-second cold load every
-time you open a `.lisp` file. The spawned image only sees the buffer
-text (not your loaded project), so global lookups and `via-macros`
-won't find symbols from your code unless you also wire didSave-loading
-(not implemented yet).
-
-Works out of the box; useful for trying things or for one-off edits.
+`gr` (textDocument/references) returns two kinds of hits: local
+references (in-buffer walk, no image state) and cross-file references
+(swank's xref tables). swank's xref tables only contain entries for
+code that has been **compiled into this image** — so cross-file `gr`
+works for symbols your supervisor's image has loaded, and returns
+nothing for symbols it hasn't. All three supervisor options above
+load your project into the image, so cross-file `gr` works in each.
+The per-attach spawn fallback does not.
 
 ## What works in nvim today
 
@@ -203,6 +225,8 @@ the option table. Notable knobs:
 
 | Option | Default | Purpose |
 |---|---|---|
+| `start_command` | `nil` | argv table (or `function(root_dir) -> argv`) that brings the swank-lsp image up when no `.swank-lsp-port` exists. e.g. `{"docker","compose","up","-d","swank"}`, `{"make","swank-up"}`, `{"bin/swank-lsp-server.sh","start"}`. |
+| `start_timeout_ms` | `30000` | How long to wait for `.swank-lsp-port` to appear after running `start_command` before falling back to per-attach spawn. |
 | `swank_lsp_root` | auto-detected | Where bin/ scripts and the fallback `.swank-lsp-port` live. |
 | `filetypes` | `{"lisp", "elp"}` | Drop `"elp"` if you don't have elp.nvim installed. |
 | `root_markers` | `{".git", "qlfile", "qlfile.lock"}` | First match walking up determines the LSP's root and where project-local `.swank-lsp-port` is looked for. |
@@ -214,7 +238,8 @@ Port-discovery priority (built into `setup`):
 1. `$SWANK_LSP_PORT` (env override)
 2. `<project-root>/.swank-lsp-port` — image started inside the project being edited
 3. `<swank_lsp_root>/.swank-lsp-port` — swank-lsp's own dev image
-4. Auto-spawn a fresh SBCL per attach (`qlot exec sbcl` if available, else bare `sbcl`)
+4. `start_command` — run user-configured supervisor, poll for `.swank-lsp-port`
+5. Auto-spawn a fresh SBCL per attach (`qlot exec sbcl` if available, else bare `sbcl`)
 
 The first three modes attach to a running image, so your evaled
 `(defmacro …)` and `(defun …)` are visible immediately. Auto-spawn

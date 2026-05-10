@@ -85,11 +85,14 @@ corrupt the stdio LSP wire)."
 
 ;;;; Public entrypoint
 
-(defun start-server (&key (transport :tcp) (port 0) (host "127.0.0.1")
+(defun start-server (&key (transport :tcp) (port 0) (host "0.0.0.0")
                           input output)
   "Start the LSP server.
 TRANSPORT: :tcp or :stdio.
 For :tcp -- PORT 0 picks a random free port (returned via SERVER-PORT).
+HOST defaults to 0.0.0.0 so the listener is reachable from inside a
+docker container's published port. Override with \"127.0.0.1\" if you
+want loopback-only.
 For :stdio -- uses INPUT/OUTPUT (default *standard-input*/*standard-output*).
 Returns the RUNNING-SERVER instance."
   (when *server*
@@ -121,8 +124,12 @@ Returns the RUNNING-SERVER instance."
                         (format *error-output* "~&swank-lsp tcp server: ~A~%" e))))
                   :name (format nil "swank-lsp tcp ~A" bound-port))))
            (setf (running-server-thread rs) thread)
-           ;; Wait briefly until the port is actually listening.
-           (wait-until-listening host bound-port 5)
+           ;; Wait briefly until the port is actually listening. Use a
+           ;; concrete loopback for the readiness probe -- connecting
+           ;; to 0.0.0.0 is a no-op on Linux but errors on BSD/macOS.
+           (wait-until-listening
+            (if (equal host "0.0.0.0") "127.0.0.1" host)
+            bound-port 5)
            (start-server-index-best-effort rs)
            rs)))
       (:stdio
@@ -178,13 +185,23 @@ the project xref index attached to the server."
       (setf *published-port-file* nil))
     t))
 
-(defun start-and-publish (&key (port 0) (host "127.0.0.1")
-                               (port-file ".swank-lsp-port"))
+(defun start-and-publish (&key (port 0) (host "0.0.0.0")
+                               (port-file ".swank-lsp-port")
+                               advertise-port)
   "Start a TCP LSP server and write the bound port to PORT-FILE.
 
 PORT-FILE is resolved relative to *DEFAULT-PATHNAME-DEFAULTS* (so call
 this from your project root, or pass an absolute path). PORT 0 picks
 a free port; the actual bound port goes into the file.
+
+ADVERTISE-PORT decouples \"what the listener binds inside this process\"
+from \"what consumers should connect to.\" When set, the file contains
+ADVERTISE-PORT instead of the bound port. The use case is docker: the
+container binds an internal port (e.g. 7777) and docker forwards a
+different host port (e.g. 7789); the editor on the host needs the
+host-side number to actually connect, not the internal one. NIL (the
+default) keeps the historical behavior — bound port goes in the file —
+which is what you want outside docker.
 
 The convention -- mirroring how swank's bootstrap script writes
 .swank-port -- is that any consumer (editor, tooling, attach shim)
@@ -193,11 +210,12 @@ server deletes the file so a stale .swank-lsp-port can never point
 at a dead listener."
   (let* ((rs (start-server :transport :tcp :port port :host host))
          (bound (running-server-port rs))
+         (advertised (or advertise-port bound))
          (path (merge-pathnames port-file)))
     (with-open-file (out path :direction :output
                               :if-exists :supersede
                               :if-does-not-exist :create)
-      (format out "~A~%" bound))
+      (format out "~A~%" advertised))
     (setf *published-port-file* path)
     rs))
 
