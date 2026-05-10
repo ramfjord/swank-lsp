@@ -149,6 +149,14 @@ Side effects:
 Caller is responsible for CLOSE-INDEX. See WITH-INDEX-CONNECTION
 for the auto-close form."
   (ensure-index-dir project-root)
+  ;; SQLite's C API is utf-8; cl-sqlite passes Lisp strings through
+  ;; CFFI's :string type, which converts using *default-foreign-encoding*.
+  ;; That defaults to whatever the SBCL locale picked (often iso-8859-1
+  ;; under POSIX/C), and any non-latin1 char in a symbol/snippet/path
+  ;; bound or fetched would error. Force utf-8 at the boundary where we
+  ;; commit to SQLite — there is no scenario where iso-8859-1 is the
+  ;; right call for this connection.
+  (setf cffi:*default-foreign-encoding* :utf-8)
   (let* ((path (index-path-for project-root))
          (conn (sqlite:connect (namestring path))))
     ;; FKs are off by default in SQLite — turn them on per-connection.

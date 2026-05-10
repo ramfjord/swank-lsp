@@ -12,6 +12,7 @@
                "usocket"
                "quri"
                "sqlite"
+               "cffi"
                "cl-scope-resolver")
   :pathname "src/"
   :serial t
