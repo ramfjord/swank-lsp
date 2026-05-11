@@ -225,8 +225,17 @@ at a dead listener."
   "Spawn a thread that stops the server shortly after exit-handler
 returns its (empty) response. We can't tear down the listening thread
 synchronously from inside a handler -- destroy-thread on self is
-unspecified and the response hasn't yet been written."
-  (when *server*
+unspecified and the response hasn't yet been written.
+
+In TCP mode this is a no-op: the server is long-lived inside a dev
+image / docker container, the client (an editor) comes and goes, and
+the LSP `exit' notification from one client must not tear down the
+listener (or delete the published port file) — that would make
+subsequent attaches fall back to spawning a fresh stdio server. The
+listening thread stays up; the per-connection thread exits naturally
+when the client closes its TCP socket."
+  (when (and *server*
+             (not (eq (running-server-transport-kind *server*) :tcp)))
     (bordeaux-threads:make-thread
      (lambda ()
        (sleep 0.1)

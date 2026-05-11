@@ -328,21 +328,19 @@ the predicate's last value (truthy on success, falsy on timeout)."
         (is (or (null (gethash "result" resp))
                 (eq (gethash "result" resp) :null)))))))
 
-;;;; NOTE: a true exit-stops-server test is omitted from the suite
-;;;; because the test fixture shares a single server across tests for
-;;;; cleanup-determinism reasons. EXIT-HANDLER is exercised by the
-;;;; standalone-fixture test below, which restarts the server afterward.
-
-(test exit-handler-stops-server-then-restarts
-  ;; This test deliberately tears down the shared server and re-creates
-  ;; it so subsequent tests in the suite still find one.
+(test exit-handler-leaves-tcp-server-up
+  ;; The LSP `exit' notification is meaningful for stdio mode where the
+  ;; server's lifecycle is the connection. In TCP mode the server is
+  ;; long-lived inside a dev image / docker container and editors
+  ;; come/go on their own TCP connections; tearing the listener down on
+  ;; one client's `exit' would force subsequent attaches to spawn fresh
+  ;; servers. So exit-handler is a no-op in TCP mode.
   (with-test-server (port)
     (with-client-socket (sock port)
       (initialize-and-open sock :uri nil :text nil)
       (notify sock "exit")))
-  ;; The exit-thunk runs in a side thread (~0.1s after exit).
-  (wait-until (lambda () (null swank-lsp:*server*)) :timeout 2.0)
-  (is (null swank-lsp:*server*))
-  ;; Re-create the server for downstream tests.
-  (ensure-test-server)
-  (is (not (null swank-lsp:*server*))))
+  ;; Give the (now-no-op) exit thunk time to *not* fire.
+  (sleep 0.3)
+  (is (not (null swank-lsp:*server*))
+      "TCP server should still be up after a client sends `exit'")
+  (is (eq :tcp (swank-lsp:server-transport-kind))))
