@@ -666,6 +666,10 @@ render markdown.")
                         :line-starts line-starts))
                (sym (extract-symbol-at text offset)))
           (declare (ignore line-starts))
+          (format *error-output* "~&;; HOVER URI=~A line=~A ch=~A sym=~S pkg=~S~%"
+                  (document-uri doc) line character sym
+                  (current-package-for-document doc))
+          (force-output *error-output*)
           (unless (and sym (plusp (length sym)))
             (return-from hover-handler +json-null+))
           (or (lexical-hover doc offset sym)
