@@ -47,14 +47,57 @@
 ;;;; this convention.
 ;;;;
 ;;;; Registration is pull-based: producers (e.g. ELP) call
-;;;; (setf (gethash "ext" swank-lsp:*byte-stream-translators*) #'fn)
-;;;; from their own load code. swank-lsp doesn't know about ELP and
-;;;; doesn't depend on any specific embedded language.
+;;;; (swank-lsp:register-byte-stream-translator "ext" #'fn) from their
+;;;; own load code. swank-lsp doesn't know about ELP and doesn't depend
+;;;; on any specific embedded language.
 
 (defvar *byte-stream-translators* (make-hash-table :test 'equal)
   "Filename-extension (lowercase, no dot) → translator function.
 Each translator is called as (TRANSLATOR URI TEXT) and must return a
-new TEXT string. See APPLY-BYTE-STREAM-TRANSLATOR.")
+new TEXT string. See APPLY-BYTE-STREAM-TRANSLATOR. Prefer
+REGISTER-BYTE-STREAM-TRANSLATOR over direct hash mutation.")
+
+(defvar *default-package-for-extension* (make-hash-table :test 'equal)
+  "Filename-extension (lowercase, no dot) → CL package name (string).
+Fallback used by CURRENT-PACKAGE-FOR-DOCUMENT when the document text
+has no (in-package …) form. Lets a project say `.elp files default to
+:mediaserver` without injecting an in-package form into translated
+text. Prefer USE-DEFAULT-PACKAGE-FOR-EXTENSION over direct mutation.")
+
+(declaim (ftype (function (string) (or null string)) uri-extension))
+(defun uri-extension (uri)
+  "Lowercase filename extension of URI without the leading dot, or
+NIL if URI has no extension. \"file:///x/y.LISP\" → \"lisp\"."
+  (let ((dot (position #\. uri :from-end t)))
+    (and dot (string-downcase (subseq uri (1+ dot))))))
+
+(declaim (ftype (function (string) string) normalize-extension))
+(defun normalize-extension (ext)
+  "Accept extensions written with or without a leading dot, in any
+case, and return the canonical form *BYTE-STREAM-TRANSLATORS* and
+*DEFAULT-PACKAGE-FOR-EXTENSION* key on (lowercase, no dot)."
+  (let ((s (string-downcase ext)))
+    (if (and (plusp (length s)) (char= (char s 0) #\.))
+        (subseq s 1)
+        s)))
+
+(defun register-byte-stream-translator (extension translator)
+  "Register TRANSLATOR for files of EXTENSION (e.g. \"elp\" or
+\".elp\"). TRANSLATOR is called as (FN URI TEXT) and must return a
+position-preserving translated TEXT — same length, same line breaks,
+same byte at every Lisp-relevant position. Replaces any prior
+registration for the same extension."
+  (setf (gethash (normalize-extension extension) *byte-stream-translators*)
+        translator))
+
+(defun use-default-package-for-extension (extension package-name)
+  "Tell swank-lsp that files of EXTENSION (e.g. \"elp\" or \".elp\")
+should resolve symbols in PACKAGE-NAME by default. An explicit
+(in-package …) in the file text still wins; this only kicks in when
+no such form is found."
+  (setf (gethash (normalize-extension extension)
+                 *default-package-for-extension*)
+        package-name))
 
 (declaim (ftype (function ((or null string) (or null string)) (or null string))
                 apply-byte-stream-translator))
@@ -65,8 +108,7 @@ TEXT unchanged. NIL URI / NIL TEXT short-circuit to TEXT."
   (cond
     ((or (null uri) (null text)) text)
     (t
-     (let* ((dot (position #\. uri :from-end t))
-            (extension (and dot (string-downcase (subseq uri (1+ dot)))))
+     (let* ((extension (uri-extension uri))
             (translator (and extension
                              (gethash extension *byte-stream-translators*))))
        (if translator
@@ -191,9 +233,16 @@ a string and the start offset of the prefix."
                 current-package-for-document))
 (defun current-package-for-document (doc)
   "Best-effort package name for DOC. Returns a string suitable for
-swank's PACKAGE arg."
-  (let ((text (and doc (document-text doc))))
-    (or (and text (parse-in-package text))
+swank's PACKAGE arg. Priority:
+  1. (in-package …) parsed from doc text wins (explicit beats implicit).
+  2. *DEFAULT-PACKAGE-FOR-EXTENSION* keyed on the URI's extension.
+  3. \"CL-USER\"."
+  (let* ((text (and doc (document-text doc)))
+         (parsed (and text (parse-in-package text))))
+    (or parsed
+        (let* ((uri (and doc (document-uri doc)))
+               (ext (and uri (uri-extension uri))))
+          (and ext (gethash ext *default-package-for-extension*)))
         "CL-USER")))
 
 (defun parse-in-package (text)

@@ -13,8 +13,8 @@
    #:document-count
    #:reset-document-store
    ;; embedded-language byte-stream translators (see document.lisp)
-   #:*byte-stream-translators*
-   #:apply-byte-stream-translator
+   #:register-byte-stream-translator
+   #:use-default-package-for-extension
    ;; position conversions (exported so Phase 2 / tests can call directly)
    #:lsp-position->char-offset
    #:char-offset->lsp-position

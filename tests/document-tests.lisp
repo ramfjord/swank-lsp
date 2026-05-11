@@ -61,3 +61,41 @@
   (is (string-equal "BAR"
                     (swank-lsp::parse-in-package
                      (format nil ";; preface~%(in-package :bar)")))))
+
+(test use-default-package-for-extension-falls-back
+  ;; Per-extension default applies when the doc has no (in-package ...).
+  (let ((swank-lsp::*default-package-for-extension* (make-hash-table :test 'equal)))
+    (swank-lsp:use-default-package-for-extension "elp" "mediaserver")
+    (let ((doc (swank-lsp::make-document
+                :uri "file:///x/foo.elp"
+                :text "(some-form 1 2)"
+                :version 1
+                :language-id "elp")))
+      (is (string= "mediaserver"
+                   (swank-lsp::current-package-for-document doc))))))
+
+(test use-default-package-for-extension-accepts-leading-dot
+  (let ((swank-lsp::*default-package-for-extension* (make-hash-table :test 'equal)))
+    (swank-lsp:use-default-package-for-extension ".ELP" "foo")
+    (let ((doc (swank-lsp::make-document
+                :uri "file:///x/y.elp" :text "" :version 1 :language-id "elp")))
+      (is (string= "foo" (swank-lsp::current-package-for-document doc))))))
+
+(test explicit-in-package-beats-extension-default
+  ;; If the doc has (in-package ...), the per-extension default is ignored.
+  (let ((swank-lsp::*default-package-for-extension* (make-hash-table :test 'equal)))
+    (swank-lsp:use-default-package-for-extension "elp" "mediaserver")
+    (let ((doc (swank-lsp::make-document
+                :uri "file:///x/foo.elp"
+                :text "(in-package :explicit-pkg)"
+                :version 1
+                :language-id "elp")))
+      (is (string-equal "EXPLICIT-PKG"
+                        (swank-lsp::current-package-for-document doc))))))
+
+(test register-byte-stream-translator-roundtrip
+  (let ((swank-lsp::*byte-stream-translators* (make-hash-table :test 'equal)))
+    (swank-lsp:register-byte-stream-translator
+     ".upper" (lambda (uri text) (declare (ignore uri)) (string-upcase text)))
+    (is (string= "HELLO" (swank-lsp::apply-byte-stream-translator
+                          "file:///x/y.upper" "hello")))))
