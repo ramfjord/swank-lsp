@@ -15,6 +15,6 @@ ql slime
 ;; previous .qlot/ that worked was built up incrementally during dev
 ;; and isn't reproducible from this qlfile alone. To be addressed
 ;; separately; not a regression from the cl-scope-resolver split.
-local jsonrpc /home/tramfjord/projects/swank-lsp/tmp/jsonrpc/
+git jsonrpc https://github.com/ramfjord/jsonrpc.git :branch fix/byte-counted-content-length-binary
 ql flexi-streams
 ql cl-sqlite
